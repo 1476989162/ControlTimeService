@@ -1,0 +1,7 @@
+{
+  "server_url": "http://localhost:19528",
+  "update_manifest_url": "",
+  "update_package_url": "",
+  "update_version": "",
+  "update_check_interval_minutes": 60
+}

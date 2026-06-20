@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ControlTimeService/ControlTimeService.csproj" />
+  <Project Path="ControlCenter/ControlCenter.csproj" />
+</Solution>

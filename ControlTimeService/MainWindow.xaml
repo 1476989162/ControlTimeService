@@ -1,0 +1,51 @@
+﻿<Window x:Class="ControlTimeService.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:ControlTimeService"
+        mc:Ignorable="d"
+        Title="家长控制服务"
+        Height="240"
+        Width="400"
+        ResizeMode="CanMinimize">
+    <Grid>
+        <StackPanel VerticalAlignment="Center"
+                HorizontalAlignment="Center">
+            <TextBlock x:Name="StatusLabel"
+                    Text="当前状态：初始化中..."
+                       FontSize="16"
+                    FontWeight="Bold"
+                    HorizontalAlignment="Center"
+                    Margin="0,0,0,10"/>
+            <TextBlock x:Name="TimeLabel"
+                    Text="剩余时间：--:--"
+                       FontSize="24"
+                    Foreground="#007ACC"
+                    HorizontalAlignment="Center"/>
+            <Button x:Name="PauseButton"
+                    Content="暂停计时"
+                    Width="100"
+                    Height="30"
+                    Margin="0,15,0,5"
+                    Click="PauseButton_Click"/>
+            <Button x:Name="ConfigButton"
+                    Content="时间配置"
+                    Width="100"
+                    Height="30"
+                    Margin="0,5,0,5"
+                    Click="ConfigButton_Click"/>
+            <Button x:Name="MessagesButton"
+                    Content="消息列表"
+                    Width="100"
+                    Height="30"
+                    Margin="0,5,0,5"
+                    Click="MessagesButton_Click"/>
+            <TextBlock Text="（点击关闭按钮可最小化到托盘）"
+                       FontSize="10"
+                    Foreground="Gray"
+                    HorizontalAlignment="Center"
+                    Margin="0,5,0,0"/>
+        </StackPanel>
+    </Grid>
+</Window>

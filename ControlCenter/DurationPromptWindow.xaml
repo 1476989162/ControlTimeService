@@ -1,0 +1,32 @@
+<Window x:Class="ControlCenter.DurationPromptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置时长"
+        Height="180"
+        Width="320"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="ToolWindow">
+    <StackPanel Margin="20">
+        <TextBlock x:Name="PromptText"
+                   Text="请设置时长（分钟）"
+                   Margin="0,0,0,10"/>
+        <ComboBox x:Name="MinutesCombo"
+                  HorizontalAlignment="Stretch"
+                  SelectedIndex="3"/>
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,15,0,0">
+            <Button Content="确定"
+                    Width="80"
+                    Margin="5,0"
+                    IsDefault="True"
+                    Click="OkButton_Click"/>
+            <Button Content="取消"
+                    Width="80"
+                    Margin="5,0"
+                    IsCancel="True"
+                    Click="CancelButton_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

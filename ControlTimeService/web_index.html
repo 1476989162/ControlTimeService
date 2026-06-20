@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>时间控制管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--pri:#2563eb;--pri-d:#1d4ed8;--ok:#16a34a;--warn:#ea580c;--danger:#dc2626;--bg:#f1f5f9;--card:#fff;--line:#e2e8f0;--txt:#0f172a;--mut:#64748b}
+body{font-family:-apple-system,'Microsoft YaHei',sans-serif;background:var(--bg);color:var(--txt);padding:12px;padding-bottom:calc(16px + env(safe-area-inset-bottom));-webkit-text-size-adjust:100%}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+h1{font-size:19px;color:var(--pri);font-weight:700}
+.card{background:var(--card);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:14px;margin-bottom:12px}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:760px}
+th,td{text-align:left;padding:9px 6px;border-bottom:1px solid var(--line)}
+th{background:#f8fafc;font-weight:600;white-space:nowrap;color:var(--mut)}
+tr:hover td{background:#eff6ff}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.b-online{background:#dcfce7;color:var(--ok)}
+.b-offline{background:#f1f5f9;color:var(--mut)}
+.b-locked{background:#fee2e2;color:var(--danger)}
+.b-paused{background:#fef3c7;color:var(--warn)}
+.btn{padding:8px 14px;border:1px solid var(--pri);background:var(--pri);color:#fff;border-radius:8px;cursor:pointer;font-size:13px;white-space:nowrap;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.85}.btn:hover{background:var(--pri-d)}
+.btn-d{border-color:var(--danger);background:var(--danger)}
+.btn-w{border-color:var(--warn);background:var(--warn)}
+.btn-i{border-color:#0891b2;background:#0891b2}
+.btn-o{background:#fff;color:var(--pri)}
+.btn-s{padding:6px 10px;font-size:12px}
+.act{display:flex;gap:6px;flex-wrap:wrap}
+#lo{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+#lb{background:#fff;border-radius:14px;padding:28px 24px;width:100%;max-width:360px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.2)}
+#lb h2{margin-bottom:20px;color:var(--pri);font-size:20px}
+#lb input{width:100%;padding:12px;margin-bottom:12px;border:1px solid var(--line);border-radius:8px;font-size:16px}
+#lb button{width:100%;padding:12px;background:var(--pri);color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}
+#lb .err{color:var(--danger);font-size:13px;margin-top:8px;display:none}
+#main{display:none}
+#sb{font-size:13px;color:var(--mut);margin-bottom:10px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--pri);border-radius:50%;animation:sp .8s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.modal{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:200;padding:12px}
+.mc{background:#fff;border-radius:14px;padding:20px;width:100%;max-width:640px;max-height:90vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.mc h3{margin-bottom:14px;font-size:17px;color:var(--pri)}
+.mc input,.mc textarea,.mc select{width:100%;padding:9px;margin:5px 0 10px;border:1px solid var(--line);border-radius:8px;font-size:15px}
+.mc label{font-size:13px;display:block;margin-top:8px;color:var(--txt)}
+.ma{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;position:sticky;bottom:0;background:#fff;padding-top:10px}
+.ma .btn{flex:1;min-width:100px;text-align:center}
+#toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:11px 20px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .3s;z-index:300;max-width:calc(100vw - 32px);text-align:center;pointer-events:none}
+#toast.show{opacity:1}
+.cc{display:none;flex-direction:column;gap:10px}
+.cci{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}
+.cch{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px}
+.ccn{font-size:15px;font-weight:600;word-break:break-all}
+.ccm{font-size:12px;color:var(--mut);line-height:1.7;margin-bottom:10px}
+.ccm span{display:inline-block;margin-right:12px}
+.cca{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.cca .btn{width:100%;padding:10px 4px;font-size:12px}
+.day{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+.day-h{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#f8fafc;cursor:pointer;font-weight:600;font-size:14px}
+.day-h .ch{font-size:12px;color:var(--mut);font-weight:400}
+.day-b{display:none;padding:12px;border-top:1px solid var(--line)}
+.day.open .day-b{display:block}
+.grp{margin-top:12px;padding:10px;background:#fafbfc;border-radius:8px;border:1px solid #f0f0f0}
+.grp-t{font-weight:600;font-size:13px;color:var(--mut);margin-bottom:8px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row label{margin-top:0}
+.mini{width:72px!important;padding:7px!important;margin:0!important}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;margin:6px 0}
+.chk input{width:auto;margin:0}
+.empty{text-align:center;color:var(--mut);padding:24px 12px;font-size:14px}
+.bub{max-width:80%;padding:8px 12px;border-radius:12px;margin:6px 0;font-size:14px;word-break:break-word;line-height:1.5}
+.bub.to{margin-left:auto;background:#dbeafe;border-bottom-right-radius:4px}
+.bub.from{margin-right:auto;background:#f1f5f9;border-bottom-left-radius:4px}
+.bub .meta{font-size:11px;color:var(--mut);margin-bottom:2px}
+#mh{max-height:240px;overflow-y:auto;margin-bottom:12px;padding:4px}
+@media(max-width:768px){body{padding:10px}h1{font-size:17px}.tw{display:none}.cc{display:flex}.modal{align-items:flex-end;padding:0}.mc{border-radius:14px 14px 0 0;max-height:92vh;padding-bottom:calc(20px + env(safe-area-inset-bottom))}.ma .btn{min-height:44px}}
+@media(min-width:769px){.cc{display:none!important}}
+</style>
+</head>
+<body>
+<div id="lo"><div id="lb">
+<h2>时间控制管理</h2>
+<input type="password" id="pi" placeholder="输入管理密码" onkeydown="if(event.key==='Enter')login()" autofocus>
+<button onclick="login()">登录</button>
+<div class="err" id="le">密码错误，请重试</div>
+</div></div>
+<div id="main">
+<div class="hd"><h1>时间控制管理</h1><button class="btn btn-s" onclick="loadClients()">刷新</button></div>
+<div id="sb">正在加载...</div>
+<div class="card tw"><table><thead><tr><th>电脑名称</th><th>IP</th><th>状态</th><th>版本</th><th>剩余时间</th><th>今日(时)</th><th>首次上线</th><th>操作</th></tr></thead><tbody id="cl"></tbody></table></div>
+<div id="cc" class="cc"></div>
+</div>
+<div id="toast"></div>
+<div id="mm" class="modal" style="display:none"><div class="mc">
+<h3 id="mt">发送消息</h3>
+<div id="mh"></div>
+<textarea id="mti" rows="3" placeholder="输入消息内容..."></textarea>
+<div style="margin:4px 0 10px;font-size:12px;color:var(--mut)">Ctrl+Enter 发送</div>
+<div class="ma"><button class="btn" onclick="sendMsg()">发送</button><button class="btn btn-o" onclick="closeMsg()">关闭</button></div>
+</div></div>
+<div id="cm" class="modal" style="display:none"><div class="mc">
+<h3 id="ct">客户端设置</h3>
+<div id="cf"></div>
+<div class="ma"><button class="btn" onclick="saveCfg()">保存并下发</button><button class="btn btn-o" onclick="closeCfg()">关闭</button></div>
+</div></div>
+<script>
+const API='';let tok=sessionStorage.getItem('wt');let mId='',mN='',cId='',mT=null;const names={};
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
+function enc(id){return encodeURIComponent(id)}
+function login(){const p=document.getElementById('pi').value;fetch(API+'/api/web/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})}).then(r=>{if(r.ok){sessionStorage.setItem('wt','1');document.getElementById('lo').style.display='none';document.getElementById('main').style.display='block';loadClients()}else{document.getElementById('le').style.display='block'}}).catch(()=>{document.getElementById('le').textContent='无法连接服务器';document.getElementById('le').style.display='block'})}
+if(tok){document.getElementById('lo').style.display='none';document.getElementById('main').style.display='block';loadClients()}
+function bcls(s){return s==='Online'||s==='Using'?'b-online':s==='Offline'?'b-offline':s==='Locked'?'b-locked':s==='Paused'?'b-paused':'b-online'}
+function btxt(s){return s==='Using'?'使用中':s==='Locked'?'锁定':s==='Paused'?'暂停':s==='Online'?'在线':s==='Offline'?'离线':s||'未知'}
+function fmt(s){if(!s||s<=0||s>86400*7)return'-';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=Math.round(s%60);return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(x).padStart(2,'0')}
+function btns(id){return '<button class="btn btn-s" onclick="lockC(\''+id+'\')">锁定</button><button class="btn btn-s btn-w" onclick="unlockC(\''+id+'\')">解锁</button><button class="btn btn-s btn-w" onclick="pauseC(\''+id+'\')">暂停</button><button class="btn btn-s btn-i" onclick="openMsg(\''+id+'\')">消息</button><button class="btn btn-s" onclick="openCfg(\''+id+'\')">设置</button><button class="btn btn-s btn-d" onclick="shutC(\''+id+'\')">关机</button>'}
+function card(c){const id=enc(c.id);const s=c.remainingSeconds||0;const h=c.totalUsageSecondsToday?(c.totalUsageSecondsToday/3600).toFixed(1):'0.0';const d=document.createElement('div');d.className='cci';d.innerHTML='<div class="cch"><div class="ccn">'+(c.name||c.id)+'</div><span class="badge '+bcls(c.status)+'">'+btxt(c.status)+'</span></div><div class="ccm"><span>IP: '+(c.ipAddress||'-')+'</span><span>版本: '+(c.appVersion||'-')+'</span><br><span>剩余: '+fmt(s)+'</span><span>今日: '+h+'h</span></div><div class="cca">'+btns(id)+'</div>';return d}
+function loadClients(){document.getElementById('sb').innerHTML='<span class="spin"></span>加载中...';fetch(API+'/api/clients').then(r=>r.json()).then(cs=>{const tb=document.getElementById('cl');const cd=document.getElementById('cc');tb.innerHTML='';cd.innerHTML='';if(!cs.length){document.getElementById('sb').textContent='暂无客户端连接';cd.innerHTML='<div class="empty">暂无客户端</div>';return}cs.forEach(c=>{const id=enc(c.id);names[id]=c.name||c.id;const s=c.remainingSeconds||0;const h=c.totalUsageSecondsToday?(c.totalUsageSecondsToday/3600).toFixed(1):'0.0';const tr=document.createElement('tr');tr.innerHTML='<td>'+(c.name||c.id)+'</td><td>'+(c.ipAddress||'')+'</td><td><span class="badge '+bcls(c.status)+'">'+btxt(c.status)+'</span></td><td>'+(c.appVersion||'')+'</td><td>'+fmt(s)+'</td><td>'+h+'</td><td>'+(c.firstSeen?new Date(c.firstSeen).toLocaleString():'')+'</td><td class="act">'+btns(id)+'</td>';tb.appendChild(tr);cd.appendChild(card(c))});document.getElementById('sb').textContent='已加载 '+cs.length+' 个客户端'}).catch(e=>{document.getElementById('sb').innerHTML='加载失败: '+e.message})}
+function lockC(id){const n=names[id]||id;const m=prompt('输入锁定分钟数','30');if(!m||isNaN(m))return;fetch(API+'/api/clients/'+id+'/lock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({minutes:parseInt(m)})}).then(r=>r.ok?toast('锁定命令已发送给 '+n):toast('失败 HTTP '+r.status)).catch(e=>toast('请求失败: '+e.message))}
+function unlockC(id){const n=names[id]||id;const m=prompt('输入解锁后可用分钟数','30');if(!m||isNaN(m))return;fetch(API+'/api/clients/'+id+'/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({minutes:parseInt(m)})}).then(r=>r.ok?toast('解锁命令已发送给 '+n):toast('失败 HTTP '+r.status)).catch(e=>toast('请求失败: '+e.message))}
+function pauseC(id){const n=names[id]||id;if(!confirm('确定暂停 '+n+' 的计时？'))return;fetch(API+'/api/clients/'+id+'/pause',{method:'POST'}).then(r=>r.ok?toast('暂停命令已发送给 '+n):toast('失败 HTTP '+r.status)).catch(e=>toast('请求失败: '+e.message))}
+function shutC(id){const n=names[id]||id;if(!confirm('确定关机 '+n+'？'))return;fetch(API+'/api/clients/'+id+'/shutdown',{method:'POST'}).then(r=>r.ok?toast('关机命令已发送给 '+n):toast('失败 HTTP '+r.status)).catch(e=>toast('请求失败: '+e.message))}
+function openMsg(id){mId=id;mN=names[id]||id;document.getElementById('mt').textContent='消息 — '+mN;document.getElementById('mti').value='';loadMsg(id);document.getElementById('mm').style.display='flex';if(mT)clearInterval(mT);mT=setInterval(()=>loadMsg(id),2000)}
+function closeMsg(){document.getElementById('mm').style.display='none';if(mT){clearInterval(mT);mT=null}}
+function loadMsg(id){const h=document.getElementById('mh');fetch(API+'/api/clients/'+id).then(r=>r.json()).then(c=>{h.innerHTML='';const ms=(c.clientMessages||[]).slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));if(!ms.length){h.innerHTML='<div class="empty">暂无消息记录</div>';return}ms.forEach(m=>{const to=m.direction==='to_client';const d=document.createElement('div');d.className='bub '+(to?'to':'from');d.innerHTML='<div class="meta">'+(to?'管理端':'客户端')+' · '+new Date(m.timestamp).toLocaleString()+'</div>'+m.text;h.appendChild(d)})}).catch(()=>{h.innerHTML='<div class="empty">加载失败</div>'})}
+function sendMsg(){const t=document.getElementById('mti').value.trim();if(!t||!mId)return;fetch(API+'/api/clients/'+mId+'/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})}).then(r=>{if(r.ok){document.getElementById('mti').value='';loadMsg(mId);toast('消息已发送给 '+mN)}else toast('发送失败')}).catch(e=>toast('请求失败: '+e.message))}
+let cfg=null;const DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];const DN=['周一','周二','周三','周四','周五','周六','周日'];
+const POLS=[['AllowVideo','允许观看视频'],['AllowWeChatMiniGames','允许微信小游戏'],['AllowMaoxiang','允许猫箱'],['AllowDouyin','允许抖音'],['AllowFanqieNovel','允许番茄小说'],['AllowTencentAppStore','允许腾讯应用宝'],['AllowOtherGames','允许其他游戏(Steam等)'],['BlockDouyinGameVideos','拦截抖音/豆包游戏视频'],['MonitorDoubao','监控豆包内打开的抖音']];
+function openCfg(id){cId=id;document.getElementById('ct').textContent='客户端设置 — '+(names[id]||id);fetch(API+'/api/clients/'+id).then(r=>r.json()).then(c=>{cfg=c.config||{};let h='';DAYS.forEach((d,i)=>{const s=cfg[d]||{};h+='<div class="day" id="day_'+d+'"><div class="day-h" onclick="tg(\''+d+'\')"><span>'+DN[i]+'</span><span class="ch">'+(s.enabled!==false?'已启用':'已禁用')+'</span></div><div class="day-b"><label><input type="checkbox" class="chk" id="en_'+d+'" '+(s.enabled!==false?'checked':'')+'> 启用此天控制</label><div class="row" style="margin-top:10px"><label>使用(分)<input type="number" inputmode="numeric" class="mini" id="us_'+d+'" value="'+(s.usageMinutes||30)+'"></label><label>休息(分)<input type="number" inputmode="numeric" class="mini" id="rs_'+d+'" value="'+(s.restMinutes||30)+'"></label></div><div class="grp"><div class="grp-t">午间规则</div><label><input type="checkbox" class="chk" id="le_'+d+'" '+(s.lunchRestrictionEnabled?'checked':'')+'> 启用午间限制</label><div class="row"><label>最大使用(分)<input type="number" inputmode="numeric" class="mini" id="lm_'+d+'" value="'+(s.lunchMaxUsageMinutes||60)+'"></label></div><div class="row"><label>开始<input type="text" class="mini" id="ls_'+d+'" value="'+(s.lunchStartTime||'11:00')+'"></label><label>结束<input type="text" class="mini" id="le2_'+d+'" value="'+(s.lunchEndTime||'14:00')+'"></label></div></div><div class="grp"><div class="grp-t">晚间规则</div><label><input type="checkbox" class="chk" id="ee_'+d+'" '+(s.eveningRestrictionEnabled?'checked':'')+'> 启用晚间限制</label><div class="row"><label>最大使用(分)<input type="number" inputmode="numeric" class="mini" id="em_'+d+'" value="'+(s.eveningMaxUsageMinutes||30)+'"></label></div><div class="row"><label>开始<input type="text" class="mini" id="es_'+d+'" value="'+(s.eveningStartTime||'18:00')+'"></label><label>结束<input type="text" class="mini" id="ee2_'+d+'" value="'+(s.eveningEndTime||'20:30')+'"></label></div></div><div class="grp"><div class="grp-t">夜间与早晨</div><div class="row"><label>夜间关机<input type="text" class="mini" id="ns_'+d+'" value="'+(s.nightShutdownTime||'20:30')+'"></label></div><label><input type="checkbox" class="chk" id="me_'+d+'" '+(s.morningLockEnabled?'checked':'')+'> 启用早晨锁定</label><div class="row"><label>解锁时间<input type="text" class="mini" id="mu_'+d+'" value="'+(s.morningUnlockTime||'08:00')+'"></label></div></div><div class="grp"><div class="grp-t">应用权限</div>';POLS.forEach(p=>{h+='<label class="chk"><input type="checkbox" id="p_'+p[0]+'_'+d+'" '+(s[p[0]]?'checked':'')+'> '+p[1]+'</label>'});h+='<div class="row" style="margin-top:8px"><label>游戏视频阈值(秒)<input type="number" inputmode="numeric" class="mini" id="dt_'+d+'" value="'+(s.douyinGameVideoThresholdSeconds||10)+'"></label></div></div></div></div>'});document.getElementById('cf').innerHTML=h;document.getElementById('cm').style.display='flex'}).catch(()=>toast('加载配置失败'))}
+function tg(d){document.getElementById('day_'+d).classList.toggle('open')}
+function closeCfg(){document.getElementById('cm').style.display='none'}
+function val(id){const e=document.getElementById(id);return e?e.value:''}
+function chk(id){const e=document.getElementById(id);return e?e.checked:false}
+function num(id,def){const e=document.getElementById(id);const v=parseInt(e?e.value:def);return isNaN(v)?def:v}
+function saveCfg(){if(!cId||!cfg)return;DAYS.forEach(d=>{if(!cfg[d])cfg[d]={day:d};const s=cfg[d];s.day=d;s.enabled=chk('en_'+d);s.usageMinutes=num('us_'+d,30);s.restMinutes=num('rs_'+d,30);s.lunchRestrictionEnabled=chk('le_'+d);s.lunchMaxUsageMinutes=num('lm_'+d,60);s.lunchStartTime=val('ls_'+d)||'11:00';s.lunchEndTime=val('le2_'+d)||'14:00';s.eveningRestrictionEnabled=chk('ee_'+d);s.eveningMaxUsageMinutes=num('em_'+d,30);s.eveningStartTime=val('es_'+d)||'18:00';s.eveningEndTime=val('ee2_'+d)||'20:30';s.nightShutdownTime=val('ns_'+d)||'20:30';s.morningLockEnabled=chk('me_'+d);s.morningUnlockTime=val('mu_'+d)||'08:00';POLS.forEach(p=>{s[p[0]]=chk('p_'+p[0]+'_'+d)});s.douyinGameVideoThresholdSeconds=num('dt_'+d,10)});fetch(API+'/api/clients/'+cId+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}).then(r=>r.ok?(toast('设置已保存并下发'),closeCfg(),loadClients()):toast('保存失败 HTTP '+r.status)).catch(e=>toast('保存失败: '+e.message))}
+setInterval(loadClients,15000);
+</script>
+</body>
+</html>
