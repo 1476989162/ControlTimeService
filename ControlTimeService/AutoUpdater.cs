@@ -75,7 +75,7 @@ namespace ControlTimeService
                         !string.IsNullOrWhiteSpace(manifest.PackageUrl) &&
                         IsNewerVersion(manifest.Version, GetCurrentVersionString()))
                     {
-                        Notify($"鍙戠幇鏂扮増鏈?{manifest.Version}锛屽紑濮嬩笅杞藉崌绾у寘...");
+                        Notify($"发现新版本 {manifest.Version}，开始下载升级包...");
                         await ApplyUpdateAsync(
                             ResolveDownloadUrl(manifest.PackageUrl, manifestUrl),
                             manifest.Version);
@@ -87,13 +87,13 @@ namespace ControlTimeService
                     !string.IsNullOrWhiteSpace(_config.UpdateVersion) &&
                     IsNewerVersion(_config.UpdateVersion, GetCurrentVersionString()))
                 {
-                    Notify($"鍙戠幇鏂扮増鏈?{_config.UpdateVersion}锛屽紑濮嬩笅杞藉崌绾у寘...");
+                    Notify($"发现新版本 {_config.UpdateVersion}，开始下载升级包...");
                     await ApplyUpdateAsync(_config.UpdatePackageUrl, _config.UpdateVersion);
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"妫€鏌ユ洿鏂板け璐? {ex.Message}");
+                Debug.WriteLine($"检查更新失败: {ex.Message}");
             }
         }
 
@@ -105,19 +105,19 @@ namespace ControlTimeService
             if (!force && !string.IsNullOrWhiteSpace(version) &&
                 !IsNewerVersion(version, GetCurrentVersionString()))
             {
-                Debug.WriteLine($"褰撳墠鐗堟湰 {GetCurrentVersionString()} 宸叉槸鏈€鏂帮紝璺宠繃鍗囩骇");
+                Debug.WriteLine($"当前版本 {GetCurrentVersionString()} 已是最新，跳过升级");
                 return;
             }
 
             if (!await _updateLock.WaitAsync(0))
             {
-                Debug.WriteLine("鍗囩骇姝ｅ湪杩涜涓紝璺宠繃閲嶅璇锋眰");
+                Debug.WriteLine("升级正在进行中，跳过重复请求");
                 return;
             }
 
             try
             {
-                Notify("姝ｅ湪涓嬭浇鍗囩骇鍖?..");
+                Notify("正在下载升级包...");
                 var workDir = Path.Combine(Path.GetTempPath(), "ControlTimeService_update", version ?? "latest");
                 Directory.CreateDirectory(workDir);
 
@@ -135,7 +135,7 @@ namespace ControlTimeService
                     if (!response.IsSuccessStatusCode)
                     {
                         throw new InvalidOperationException(
-                            $"涓嬭浇鍗囩骇鍖呭け璐? HTTP {(int)response.StatusCode} ({response.ReasonPhrase})锛孶RL: {downloadUrl}");
+                            $"下载升级包失败: HTTP {(int)response.StatusCode} ({response.ReasonPhrase})，URL: {downloadUrl}");
                     }
 
                     var bytes = await response.Content.ReadAsByteArrayAsync();
@@ -148,7 +148,7 @@ namespace ControlTimeService
                     await File.WriteAllBytesAsync(zipPath, bytes);
                 }
 
-                Notify("姝ｅ湪瑙ｅ帇鍗囩骇鍖?..");
+                Notify("正在解压升级包...");
                 ZipFile.ExtractToDirectory(zipPath, extractDir);
                 var sourceDir = ResolvePackageRoot(extractDir);
 
@@ -165,7 +165,7 @@ start """" ""{exePath}""
 ";
                 await File.WriteAllTextAsync(updaterScript, script);
 
-                Notify($"鍗囩骇鍖呭凡灏辩华锛屾鍦ㄥ畨瑁呯増鏈?{version ?? "鏈煡"}...");
+                Notify($"升级包已就绪，正在安装版本 {version ?? "未知"}...");
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = updaterScript,
@@ -181,8 +181,8 @@ start """" ""{exePath}""
             }
             catch (Exception ex)
             {
-                Notify($"鍗囩骇澶辫触: {ex.Message}");
-                Debug.WriteLine($"鍗囩骇澶辫触: {ex}");
+                Notify($"升级失败: {ex.Message}");
+                Debug.WriteLine($"升级失败: {ex}");
             }
             finally
             {

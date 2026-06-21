@@ -42,6 +42,12 @@
                         Height="30"
                         Margin="5"
                         Visibility="Collapsed"/>
+                <Button x:Name="BtnKill"
+                        Content="退出程序"
+                        Click="BtnKill_Click"
+                        Width="100"
+                        Height="30"
+                        Margin="5"/>
             </StackPanel>
         </StackPanel>
     </Grid>

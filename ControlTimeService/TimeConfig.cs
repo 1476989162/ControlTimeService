@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ControlTimeService
 {
@@ -17,42 +18,67 @@ namespace ControlTimeService
 
     public class DaySchedule
     {
+        [JsonPropertyName("day")]
         public DayOfWeek Day { get; set; }
+        [JsonPropertyName("usageMinutes")]
         public int UsageMinutes { get; set; }      // 使用时长（分钟）
+        [JsonPropertyName("restMinutes")]
         public int RestMinutes { get; set; }       // 休息时长（分钟）
-        public bool Enabled { get; set; }          // 是否启用
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; set; } = true;          // 是否启用（UI 默认不勾选，但运行时默认启用避免锁死）
         
         // 午间规则
+        [JsonPropertyName("lunchRestrictionEnabled")]
         public bool LunchRestrictionEnabled { get; set; }
+        [JsonPropertyName("lunchMaxUsageMinutes")]
         public int LunchMaxUsageMinutes { get; set; }  // 午间最大使用时长
+        [JsonPropertyName("lunchStartTime")]
         public string LunchStartTime { get; set; }   // 午间开始时间 (HH:mm)
+        [JsonPropertyName("lunchEndTime")]
         public string LunchEndTime { get; set; }     // 午间结束时间 (HH:mm)
         
         // 晚间规则
+        [JsonPropertyName("eveningRestrictionEnabled")]
         public bool EveningRestrictionEnabled { get; set; }
+        [JsonPropertyName("eveningMaxUsageMinutes")]
         public int EveningMaxUsageMinutes { get; set; }
+        [JsonPropertyName("eveningStartTime")]
         public string EveningStartTime { get; set; }
+        [JsonPropertyName("eveningEndTime")]
         public string EveningEndTime { get; set; }
         
         // 夜间关机时间
+        [JsonPropertyName("nightShutdownTime")]
         public string NightShutdownTime { get; set; } = "20:30";
 
         // 早晨锁定（解锁时间前强制锁屏）
+        [JsonPropertyName("morningLockEnabled")]
         public bool MorningLockEnabled { get; set; } = false;
+        [JsonPropertyName("morningUnlockTime")]
         public string MorningUnlockTime { get; set; } = "08:00";
 
         // 应用权限（每天独立配置）
+        [JsonPropertyName("allowVideo")]
         public bool AllowVideo { get; set; } = false;
+        [JsonPropertyName("allowWeChatMiniGames")]
         public bool AllowWeChatMiniGames { get; set; } = false;
+        [JsonPropertyName("allowMaoxiang")]
         public bool AllowMaoxiang { get; set; } = true;
+        [JsonPropertyName("allowDouyin")]
         public bool AllowDouyin { get; set; } = false;
+        [JsonPropertyName("allowFanqieNovel")]
         public bool AllowFanqieNovel { get; set; } = true;
+        [JsonPropertyName("allowTencentAppStore")]
         public bool AllowTencentAppStore { get; set; } = true;
+        [JsonPropertyName("allowOtherGames")]
         public bool AllowOtherGames { get; set; } = false;
 
         // 抖音游戏视频监控（AllowDouyin=true 时仍拦截游戏内容）
+        [JsonPropertyName("blockDouyinGameVideos")]
         public bool BlockDouyinGameVideos { get; set; } = true;
+        [JsonPropertyName("douyinGameVideoThresholdSeconds")]
         public int DouyinGameVideoThresholdSeconds { get; set; } = 10;
+        [JsonPropertyName("monitorDoubao")]
         public bool MonitorDoubao { get; set; } = true;
 
         /// <summary>提取当天的 AppPolicy（用于向后兼容和监控）</summary>
@@ -281,7 +307,8 @@ namespace ControlTimeService
                     Day = day,
                     UsageMinutes = 30,
                     RestMinutes = day >= DayOfWeek.Monday && day <= DayOfWeek.Friday ? 30 : 45,
-                    Enabled = true,
+                    // 默认不启用：新装客户端只有家长明确开启当天控制后才进入正常计时。
+                    Enabled = false,
                     LunchRestrictionEnabled = true,
                     LunchMaxUsageMinutes = 60,
                     LunchStartTime = "11:00",

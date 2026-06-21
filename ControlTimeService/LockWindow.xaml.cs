@@ -81,8 +81,6 @@ namespace ControlTimeService
                 this.Loaded += (s, e) =>
                 {
                     EnforceLockScreen();
-                    LockWorkStation();
-                    EnforceLockScreen();
                 };
 
                 this.Deactivated += (s, e) =>
@@ -135,17 +133,10 @@ namespace ControlTimeService
             {
                 _onUiTick?.Invoke();
 
-                if (!_isAdminMode && !_isShutdownMode && IsNightlyShutdownTime(DateTime.Now))
-                {
-                    EnterShutdownMode();
-                    _onEnterShutdownMode?.Invoke();
-                    return;
-                }
-
                 if (!_isAdminMode && !_isShutdownMode && !_isPasswordRequiredOnly && !_isPauseMode)
                 {
                     var remaining = _endTime - DateTime.Now;
-                    if (remaining.TotalSeconds <= 0) UnlockAndClose();
+                    if (remaining.TotalSeconds <= 0) ForceClose();
                     else TxtTimer.Text = $"距离解锁还剩: {remaining.Minutes:D2}:{remaining.Seconds:D2}";
                 }
             };
@@ -184,7 +175,13 @@ namespace ControlTimeService
 
         private void EnterPasswordOnlyMode()
         {
-            TxtTitle.Text = "晚间时段超限，请输入密码";
+            var now = DateTime.Now;
+            if (IsNightlyShutdownTime(now))
+                TxtTitle.Text = "夜间时段已超限，请输入密码";
+            else if (now.TimeOfDay >= new TimeSpan(18, 0, 0) && now.TimeOfDay < new TimeSpan(20, 30, 0))
+                TxtTitle.Text = "晚间时段已超限，请输入密码";
+            else
+                TxtTitle.Text = "使用时间已超限，请输入密码";
             TxtTimer.Visibility = Visibility.Collapsed;
             BtnShutdown.Visibility = Visibility.Collapsed;
         }
@@ -224,7 +221,14 @@ namespace ControlTimeService
                 }
 
                 WasPauseUnlock = true;
-                UnlockAndClose();
+                ForceClose();
+                return;
+            }
+
+            // 如果已经验证过密码（按钮文字变为"关闭锁屏"），直接关闭
+            if (BtnUnlock.Content.ToString() == "关闭锁屏")
+            {
+                ForceClose();
                 return;
             }
 
@@ -238,18 +242,22 @@ namespace ControlTimeService
                 {
                     WasMorningLockUnlock = true;
                 }
+                else if (!_isAdminMode)
+                {
+                    WasPasswordOnlyUnlock = true;
+                }
 
                 if (!_isAdminMode)
                 {
-                    var minutes = PromptTemporaryUsageMinutes();
-                    if (!minutes.HasValue)
-                    {
-                        return;
-                    }
-                    TemporaryUsageMinutes = minutes.Value;
+                    TemporaryUsageMinutes = 30;
                 }
 
-                UnlockAndClose();
+                // 密码正确 → 显示解锁状态，让用户选择"关闭锁屏"或"退出程序"
+                TxtTitle.Text = "已解锁";
+                TxtTimer.Text = "点击下方按钮关闭锁屏，或退出程序";
+                PassBox.Visibility = Visibility.Collapsed;
+                BtnUnlock.Content = "关闭锁屏";
+                BtnShutdown.Visibility = Visibility.Collapsed;
             }
             else
             {
@@ -259,75 +267,41 @@ namespace ControlTimeService
 
         private int? PromptTemporaryUsageMinutes()
         {
-            if (_isPasswordRequiredOnly)
-            {
-                return 30;
-            }
-
-            var popup = new Window
-            {
-                Title = "临时解锁时长",
-                Width = 300,
-                Height = 170,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.NoResize,
-                WindowStyle = WindowStyle.ToolWindow,
-                Owner = this,
-                Topmost = true
-            };
-
-            var combo = new System.Windows.Controls.ComboBox
-            {
-                Margin = new Thickness(0, 10, 0, 15),
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
-                ItemsSource = new[] { 10, 15, 20, 30 },
-                SelectedItem = 30
-            };
-
-            var okBtn = new System.Windows.Controls.Button { Content = "确定", Width = 80, Margin = new Thickness(5), IsDefault = true };
-            var cancelBtn = new System.Windows.Controls.Button { Content = "取消", Width = 80, Margin = new Thickness(5), IsCancel = true };
-
-            int selectedMinutes = 30;
-
-            okBtn.Click += (s, e) =>
-            {
-                if (combo.SelectedItem is int m)
-                {
-                    selectedMinutes = m;
-                    popup.DialogResult = true;
-                }
-                else
-                {
-                    System.Windows.MessageBox.Show("请选择时长。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            };
-
-            cancelBtn.Click += (s, e) => popup.DialogResult = false;
-
-            var buttonPanel = new System.Windows.Controls.StackPanel
-            {
-                Orientation = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
-                Children = { okBtn, cancelBtn }
-            };
-
-            var root = new System.Windows.Controls.StackPanel { Margin = new Thickness(15) };
-            root.Children.Add(new System.Windows.Controls.TextBlock { Text = "请输入继续可使用时间（分钟）", Margin = new Thickness(0, 0, 0, 5) });
-            root.Children.Add(combo);
-            root.Children.Add(buttonPanel);
-
-            popup.Content = root;
-
-            return popup.ShowDialog() == true ? selectedMinutes : null;
+            return 30;
         }
 
-        private void UnlockAndClose()
+        /// <summary>
+        /// 强制关闭锁屏窗口，不被 OnClosing 阻拦
+        /// </summary>
+        private void ForceClose()
         {
             _uiTimer?.Stop();
             _focusTimer?.Stop();
             if (!_isAdminMode) _hook.Unhook();
-            this.DialogResult = true; // 验证成功返回 true
-            this.Close();
+            // 直接标记已关闭，绕过 OnClosing 的阻拦逻辑
+            this.DialogResult = true;
+            try { this.Close(); } catch { }
+        }
+
+        private void BtnKill_Click(object sender, RoutedEventArgs e)
+        {
+            // 需要先输入管理密码才能退出
+            if (PassBox.Password != _password)
+            {
+                System.Windows.MessageBox.Show("请先在上方输入管理密码！");
+                return;
+            }
+
+            if (System.Windows.MessageBox.Show("确定要退出 ControlTimeService 吗？\n退出后将不再受时间控制。", "确认退出",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+            {
+
+                ForceClose();
+                System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    System.Windows.Application.Current.Shutdown();
+                }));
+            }
         }
 
         public void ForceRemoteUnlock(int usageMinutes)
@@ -349,7 +323,7 @@ namespace ControlTimeService
                 TemporaryUsageMinutes = usageMinutes;
             }
 
-            UnlockAndClose();
+            ForceClose();
         }
 
         public void ForceAbortForRemoteCommand()
@@ -358,7 +332,7 @@ namespace ControlTimeService
             WasPauseUnlock = false;
             WasPasswordOnlyUnlock = false;
             TemporaryUsageMinutes = null;
-            UnlockAndClose();
+            ForceClose();
         }
 
         public void UpdateEndTime(DateTime endTime)

@@ -335,18 +335,17 @@ namespace ControlTimeService
         private System.Collections.Generic.IEnumerable<System.Windows.Controls.Control> GetAllControls(System.Windows.DependencyObject parent)
         {
             var controls = new System.Collections.Generic.List<System.Windows.Controls.Control>();
-            
+
             for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
             {
                 var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
-                
+
                 if (child is System.Windows.Controls.Control control)
-                {
                     controls.Add(control);
-                    controls.AddRange(GetAllControls(child));
-                }
+
+                controls.AddRange(GetAllControls(child));
             }
-            
+
             return controls;
         }
     }

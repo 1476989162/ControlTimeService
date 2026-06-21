@@ -31,6 +31,8 @@ namespace ControlTimeService
         private double _eveningAccumulatedSeconds = 0;
         private bool _eveningPasswordBypassActive = false;
         private bool _lunchPasswordBypassActive = false;
+        private DateTime _nightShutdownBypassUntil = DateTime.MinValue;
+        private DateTime _morningLockBypassUntil = DateTime.MinValue;
         private bool _isAppViolationPause = false;
         private bool _isMorningLockMode = false;
         private bool _morningPasswordBypassActive = false;
@@ -178,7 +180,7 @@ namespace ControlTimeService
 
             TryApplyPendingUpdate();
 
-            if (IsNightlyShutdownTime(now) && !_isShutdownMode)
+            if (IsNightlyShutdownTime(now) && !_isShutdownMode && now > _nightShutdownBypassUntil)
             {
                 StartRestMode(null, true);
                 return;
@@ -186,7 +188,7 @@ namespace ControlTimeService
 
             if (IsMorningLockTime(now))
             {
-                if (!_morningPasswordBypassActive && !_isShutdownMode && !_isTimingPaused)
+                if (!_morningPasswordBypassActive && !_isShutdownMode && !_isTimingPaused && now > _morningLockBypassUntil)
                 {
                     if (!_isMorningLockMode)
                     {
@@ -472,6 +474,11 @@ namespace ControlTimeService
                     if (lockWin.WasPasswordOnlyUnlock)
                     {
                         _eveningPasswordBypassActive = true;
+                        _lunchPasswordBypassActive = true;
+                        // 防止夜间关机时间和早晨锁定立刻重新锁定
+                        var bypassDuration = TimeSpan.FromMinutes(lockWin.TemporaryUsageMinutes ?? 30);
+                        _nightShutdownBypassUntil = DateTime.Now.Add(bypassDuration);
+                        _morningLockBypassUntil = DateTime.Now.Add(bypassDuration);
                     }
                     else if (lockWin.WasMorningLockUnlock)
                     {
@@ -621,24 +628,26 @@ namespace ControlTimeService
                     }
                     else if (savedIsShutdown)
                     {
-                        StartRestMode(null, true);
+                        // 重启后不恢复夜间关机锁（状态已过期）
+                        StartUsageMode();
                     }
                     else if (savedIsResting)
                     {
                         if (savedIsPasswordRequiredOnly)
                         {
-                            if (IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now))
+                            if (IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now)
+                                && now < savedTargetTime)
                             {
                                 StartRestMode(null, false, true);
                             }
                             else
                             {
+                                // 重启后状态过期（早上了），不恢复锁定
                                 StartUsageMode();
                             }
                         }
                         else if ((savedTargetTime - now).TotalHours > 24)
                         {
-                            // 目标时间超过 24 小时不合理，重置为正常使用模式
                             StartUsageMode();
                         }
                         else if (now < savedTargetTime)
@@ -647,6 +656,7 @@ namespace ControlTimeService
                         }
                         else
                         {
+                            // 重启后休息时间已过，不恢复锁定
                             StartUsageMode();
                         }
                     }
@@ -948,6 +958,13 @@ namespace ControlTimeService
                 if (!_isResting && !_isShutdownMode)
                     StartRestMode(null, false, true);
             }
+            else if (_isPasswordRequiredOnly && !IsEveningRestrictedWindow(DateTime.Now) && !IsLunchRestrictedWindow(DateTime.Now))
+            {
+                // 管理端重新启用当天控制时，立即退出“未启用导致的密码锁”状态。
+                _isPasswordRequiredOnly = false;
+                _isResting = false;
+                StartUsageMode();
+            }
 
             ShowNotification("设置已更新", "管理端下发的配置已生效");
         }
@@ -978,6 +995,25 @@ namespace ControlTimeService
             _appMonitor.SetPolicy(_appPolicyManager.GetPolicy());
 
             var now = DateTime.Now;
+            var schedule = _configManager.GetScheduleForToday();
+
+            // 立即应用“启用此天控制”开关，避免保存后仍按旧状态运行。
+            if (!schedule.Enabled)
+            {
+                if (!_isResting && !_isShutdownMode && !_isTimingPaused)
+                    StartRestMode(null, false, true);
+
+                ReportStatusToControl();
+                return;
+            }
+
+            if (_isPasswordRequiredOnly && !IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now))
+            {
+                _isPasswordRequiredOnly = false;
+                _isResting = false;
+                StartUsageMode();
+            }
+
             ClearEveningLockDuringLunch(now);
             EvaluateTimeWindowRules(now);
             ReportStatusToControl();
@@ -1097,12 +1133,11 @@ namespace ControlTimeService
             System.Windows.Controls.Grid.SetRow(btnPanel, 2);
             grid.Children.Add(btnPanel);
 
-            sendBtn.Click += (s, args) =>
+            sendBtn.Click += async (s, args) =>
             {
                 var reply = replyBox.Text.Trim();
-                if (!string.IsNullOrEmpty(reply))
+                if (!string.IsNullOrEmpty(reply) && await _controlClient.SendMessageToServerAsync(reply))
                 {
-                    _controlClient.SendMessageToServerAsync(reply);
                     _notifyIcon?.ShowBalloonTip(2000, "回复已发送", $"回复内容: {reply}", ToolTipIcon.Info);
                     replyBox.Text = "";
                 }
@@ -1110,14 +1145,13 @@ namespace ControlTimeService
             closeBtn.Click += (s, args) => win.Close();
 
             // Ctrl+Enter 发送
-            replyBox.KeyDown += (s, args) =>
+            replyBox.KeyDown += async (s, args) =>
             {
                 if (args.Key == System.Windows.Input.Key.Enter && args.KeyboardDevice.Modifiers == System.Windows.Input.ModifierKeys.Control)
                 {
                     var reply = replyBox.Text.Trim();
-                    if (!string.IsNullOrEmpty(reply))
+                    if (!string.IsNullOrEmpty(reply) && await _controlClient.SendMessageToServerAsync(reply))
                     {
-                        _controlClient.SendMessageToServerAsync(reply);
                         _notifyIcon?.ShowBalloonTip(2000, "回复已发送", $"回复内容: {reply}", ToolTipIcon.Info);
                         replyBox.Text = "";
                     }
@@ -1241,7 +1275,7 @@ namespace ControlTimeService
                     lines.Add($"[{m.Timestamp:MM-dd HH:mm:ss}] {dir}：{m.Text}");
                 }
                 historyBox.Text = string.Join(Environment.NewLine, lines);
-                historyBox.ScrollToHome();
+                historyBox.ScrollToEnd();
             }
 
             refreshBtn.Click += async (s, args) => await LoadHistoryAsync();
@@ -1251,7 +1285,9 @@ namespace ControlTimeService
                 if (string.IsNullOrEmpty(reply))
                     return;
 
-                _controlClient.SendMessageToServerAsync(reply);
+                if (!await _controlClient.SendMessageToServerAsync(reply))
+                    return;
+
                 replyBox.Text = "";
                 ShowNotification("回复已发送", reply);
                 await LoadHistoryAsync();
@@ -1265,7 +1301,9 @@ namespace ControlTimeService
                     var reply = replyBox.Text.Trim();
                     if (!string.IsNullOrEmpty(reply))
                     {
-                        _controlClient.SendMessageToServerAsync(reply);
+                        if (!await _controlClient.SendMessageToServerAsync(reply))
+                            return;
+
                         replyBox.Text = "";
                         await LoadHistoryAsync();
                     }

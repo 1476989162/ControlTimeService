@@ -198,6 +198,13 @@ namespace ControlTimeService
 
         private bool TryGetBlockReason(string processName, string windowTitle, out string reason)
         {
+            // 猫箱允许时直接放行，避免被应用宝容器/游戏/字节系等规则误伤
+            if (_policy.AllowMaoxiang && IsMaoxiang(processName, windowTitle))
+            {
+                reason = null;
+                return false;
+            }
+
             if (!_policy.AllowWeChatMiniGames && IsWeChatMiniGame(windowTitle, processName))
             {
                 reason = $"微信小游戏: {windowTitle}";
@@ -350,11 +357,16 @@ namespace ControlTimeService
 
         private bool IsMaoxiang(string processName, string title)
         {
-            string[] maoxiangProcesses = { "maoxiang", "Maoxiang", "catbox", "CatBox", "miaohezi" };
+            string[] maoxiangProcesses = {
+                "maoxiang", "Maoxiang", "catbox", "CatBox", "miaohezi",
+                "parallel", "Parallel", "odyssey", "Odyssey",
+                "iredwhale", "IredWhale", "huolu"
+            };
             if (maoxiangProcesses.Any(p => processName.Contains(p, StringComparison.OrdinalIgnoreCase)))
                 return true;
 
-            return title.Contains("猫箱", StringComparison.OrdinalIgnoreCase);
+            string[] maoxiangTitleKeywords = { "猫箱", "话炉" };
+            return maoxiangTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
         }
 
         private bool IsFanqieNovel(string processName, string title)

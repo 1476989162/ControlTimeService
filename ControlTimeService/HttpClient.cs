@@ -214,7 +214,7 @@ namespace ControlTimeService
 
                 var messages = JsonSerializer.Deserialize<List<ClientMessage>>(msgsEl.GetRawText(), CommandJsonOptions)
                                ?? new List<ClientMessage>();
-                messages.Sort((a, b) => b.Timestamp.CompareTo(a.Timestamp));
+                messages.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
                 return messages;
             }
             catch (Exception ex)
@@ -224,7 +224,7 @@ namespace ControlTimeService
             }
         }
 
-        public async void SendMessageToServerAsync(string text)
+        public async Task<bool> SendMessageToServerAsync(string text)
         {
             try
             {
@@ -233,16 +233,19 @@ namespace ControlTimeService
                 var response = await _httpClient.PostAsync(
                     ClientApiPath("/message"), content);
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    System.Diagnostics.Debug.WriteLine($"发送回复失败: HTTP {(int)response.StatusCode} {error}");
-                    _mainWindow.ShowNotification("消息发送失败", $"HTTP {(int)response.StatusCode}");
-                }
+                if (response.IsSuccessStatusCode)
+                    return true;
+
+                var error = await response.Content.ReadAsStringAsync();
+                System.Diagnostics.Debug.WriteLine($"发送回复失败: HTTP {(int)response.StatusCode} {error}");
+                _mainWindow.ShowNotification("消息发送失败", $"HTTP {(int)response.StatusCode}");
+                return false;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"发送回复失败: {ex.Message}");
+                _mainWindow.ShowNotification("消息发送失败", ex.Message);
+                return false;
             }
         }
 
