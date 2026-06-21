@@ -198,8 +198,8 @@ namespace ControlTimeService
 
         private bool TryGetBlockReason(string processName, string windowTitle, out string reason)
         {
-            // 猫箱允许时直接放行，避免被应用宝容器/游戏/字节系等规则误伤
-            if (_policy.AllowMaoxiang && IsMaoxiang(processName, windowTitle))
+            // 已明确允许的应用直接放行，避免被应用宝容器、ByteDance 进程、游戏等规则误伤
+            if (IsExplicitlyAllowedApp(processName, windowTitle))
             {
                 reason = null;
                 return false;
@@ -255,6 +255,15 @@ namespace ControlTimeService
             }
 
             reason = null;
+            return false;
+        }
+
+        private bool IsExplicitlyAllowedApp(string processName, string windowTitle)
+        {
+            if (_policy.AllowMaoxiang && IsMaoxiang(processName, windowTitle))
+                return true;
+            if (_policy.AllowFanqieNovel && IsFanqieNovel(processName, windowTitle))
+                return true;
             return false;
         }
 
@@ -373,12 +382,14 @@ namespace ControlTimeService
         {
             string[] fanqieProcesses = {
                 "fanqie", "Fanqie", "dragonread", "DragonRead", "novelfm", "NovelFm",
-                "hongguo", "HongGuo", "changdu", "ChangDu"
+                "hongguo", "HongGuo", "changdu", "ChangDu", "drread", "DrRead"
             };
             if (fanqieProcesses.Any(p => processName.Contains(p, StringComparison.OrdinalIgnoreCase)))
                 return true;
 
-            string[] fanqieTitleKeywords = { "番茄小说", "番茄畅听", "红果短剧", "番茄免费小说" };
+            string[] fanqieTitleKeywords = {
+                "番茄小说", "番茄畅听", "番茄免费小说", "红果短剧", "红果", "常读", "番茄"
+            };
             return fanqieTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -427,27 +438,39 @@ namespace ControlTimeService
 
         private bool IsTencentAppStoreGame(string processName, string title)
         {
-            string[] gameProcesses = {
-                "txgame", "qmemulator", "aow_rootfs", "aow_exe", "androws",
-                "AndroidEmulator", "TGB", "GameAssist", "MobileGamePC"
-            };
+            if (IsExplicitlyAllowedApp(processName, title))
+                return false;
 
-            if (gameProcesses.Any(gp => processName.Contains(gp, StringComparison.OrdinalIgnoreCase)))
+            string[] dedicatedGameProcesses = { "txgame", "TGB", "GameAssist", "MobileGamePC" };
+            if (dedicatedGameProcesses.Any(gp => processName.Contains(gp, StringComparison.OrdinalIgnoreCase)))
                 return true;
 
-            string[] gameTitleKeywords = { "腾讯手游助手", "手游助手", "正在运行", "游戏中" };
-            if (gameTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            string[] containerProcesses = {
+                "androws", "aow_rootfs", "aow_exe", "AndroidEmulator", "qmemulator",
+                "pcyyb", "appmarket", "YYBMarket"
+            };
+            if (!containerProcesses.Any(gp => processName.Contains(gp, StringComparison.OrdinalIgnoreCase)))
             {
-                if (processName.Contains("pcyyb", StringComparison.OrdinalIgnoreCase) ||
-                    processName.Contains("appmarket", StringComparison.OrdinalIgnoreCase) ||
-                    processName.Contains("androws", StringComparison.OrdinalIgnoreCase) ||
-                    processName.Contains("txgame", StringComparison.OrdinalIgnoreCase))
+                string[] gameTitleKeywords = { "腾讯手游助手", "手游助手", "正在运行", "游戏中" };
+                if (gameTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase)))
                 {
-                    return true;
+                    if (processName.Contains("pcyyb", StringComparison.OrdinalIgnoreCase) ||
+                        processName.Contains("appmarket", StringComparison.OrdinalIgnoreCase) ||
+                        processName.Contains("androws", StringComparison.OrdinalIgnoreCase) ||
+                        processName.Contains("txgame", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
                 }
+                return false;
             }
 
-            return false;
+            // 应用宝容器也用于番茄小说、猫箱等非游戏 App，需结合标题/游戏特征判断
+            string[] gameSignals = { "腾讯手游助手", "手游助手", "正在运行", "游戏中" };
+            if (gameSignals.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            return IsOtherGame(processName, title);
         }
 
         private bool IsOtherGame(string processName, string title)
