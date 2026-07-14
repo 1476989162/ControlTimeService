@@ -44,7 +44,7 @@ namespace ControlTimeService
         private string _pendingUpdateVersion;
 
         private string _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "state.txt");
-        private string _adminPass = "lnbxSoftLizhenNiping"; // 管理密码
+        private string _adminPass = "123456789"; // 管理密码
         private NotifyIcon _notifyIcon;
         private AppMonitor _appMonitor;
         private TimeConfigManager _configManager;
