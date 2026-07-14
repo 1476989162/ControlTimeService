@@ -7,31 +7,35 @@ namespace ControlTimeService
     {
         /// <summary>是否允许观看视频（B站、爱奇艺、优酷等）</summary>
         [JsonPropertyName("allowVideo")]
-        public bool AllowVideo { get; set; }
+        public bool AllowVideo { get; set; } = false;
 
         /// <summary>是否允许微信小游戏</summary>
         [JsonPropertyName("allowWeChatMiniGames")]
-        public bool AllowWeChatMiniGames { get; set; }
+        public bool AllowWeChatMiniGames { get; set; } = false;
 
         /// <summary>是否允许猫箱</summary>
         [JsonPropertyName("allowMaoxiang")]
-        public bool AllowMaoxiang { get; set; }
+        public bool AllowMaoxiang { get; set; } = true;
 
         /// <summary>是否允许抖音</summary>
         [JsonPropertyName("allowDouyin")]
-        public bool AllowDouyin { get; set; }
+        public bool AllowDouyin { get; set; } = true;
+
+        /// <summary>是否允许快手</summary>
+        [JsonPropertyName("allowKuaishou")]
+        public bool AllowKuaishou { get; set; } = true;
 
         /// <summary>是否允许番茄小说</summary>
         [JsonPropertyName("allowFanqieNovel")]
-        public bool AllowFanqieNovel { get; set; }
+        public bool AllowFanqieNovel { get; set; } = true;
 
         /// <summary>是否允许腾讯应用宝（仅商店客户端，不含其内游戏）</summary>
         [JsonPropertyName("allowTencentAppStore")]
-        public bool AllowTencentAppStore { get; set; }
+        public bool AllowTencentAppStore { get; set; } = true;
 
         /// <summary>是否允许其他游戏（Steam 等）</summary>
         [JsonPropertyName("allowOtherGames")]
-        public bool AllowOtherGames { get; set; }
+        public bool AllowOtherGames { get; set; } = true;
 
         /// <summary>是否拦截抖音/豆包中的游戏视频（AllowDouyin=true 时仍生效）</summary>
         [JsonPropertyName("blockDouyinGameVideos")]
@@ -52,10 +56,11 @@ namespace ControlTimeService
                 AllowVideo = false,
                 AllowWeChatMiniGames = false,
                 AllowMaoxiang = true,
-                AllowDouyin = false,
+                AllowDouyin = true,
+                AllowKuaishou = true,
                 AllowFanqieNovel = true,
                 AllowTencentAppStore = true,
-                AllowOtherGames = false,
+                AllowOtherGames = true,
                 BlockDouyinGameVideos = true,
                 DouyinGameVideoThresholdSeconds = 10,
                 MonitorDoubao = true
@@ -70,6 +75,7 @@ namespace ControlTimeService
                 AllowWeChatMiniGames = AllowWeChatMiniGames,
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
+                AllowKuaishou = AllowKuaishou,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -129,6 +135,7 @@ namespace ControlTimeService
             schedule.AllowWeChatMiniGames = policy.AllowWeChatMiniGames;
             schedule.AllowMaoxiang = policy.AllowMaoxiang;
             schedule.AllowDouyin = policy.AllowDouyin;
+            schedule.AllowKuaishou = policy.AllowKuaishou;
             schedule.AllowFanqieNovel = policy.AllowFanqieNovel;
             schedule.AllowTencentAppStore = policy.AllowTencentAppStore;
             schedule.AllowOtherGames = policy.AllowOtherGames;

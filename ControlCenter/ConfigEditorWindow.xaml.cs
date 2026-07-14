@@ -173,6 +173,7 @@ namespace ControlCenter
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许微信小游戏", schedule.AllowWeChatMiniGames, "AllowWeChatMiniGames"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许猫箱", schedule.AllowMaoxiang, "AllowMaoxiang"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许抖音", schedule.AllowDouyin, "AllowDouyin"));
+            appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许快手", schedule.AllowKuaishou, "AllowKuaishou"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许番茄小说", schedule.AllowFanqieNovel, "AllowFanqieNovel"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许腾讯应用宝（不含其内游戏）", schedule.AllowTencentAppStore, "AllowTencentAppStore"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许其他游戏（Steam 等）", schedule.AllowOtherGames, "AllowOtherGames"));
@@ -281,6 +282,9 @@ namespace ControlCenter
                                     break;
                                 case "AllowDouyin":
                                     schedule.AllowDouyin = checkBox.IsChecked ?? false;
+                                    break;
+                                case "AllowKuaishou":
+                                    schedule.AllowKuaishou = checkBox.IsChecked ?? false;
                                     break;
                                 case "AllowFanqieNovel":
                                     schedule.AllowFanqieNovel = checkBox.IsChecked ?? false;

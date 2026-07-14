@@ -393,10 +393,16 @@ namespace ControlTimeService
                     {
                         client.Config = clientData.Config;
                         _registry.SaveConfig(client.Id, clientData.Config);
+                        SyncAppPolicyFromConfig(client.Id, clientData.Config);
                     }
 
-                    if (record.AppPolicy != null)
+                    // 仅在没有完整日程配置时推送旧版独立 AppPolicy，避免覆盖配置里已保存的应用权限
+                    if (record.AppPolicy != null &&
+                        (record.Config == null || record.Config.Count == 0))
+                    {
                         client.AppPolicy ??= record.AppPolicy;
+                        QueueAppPolicyCommand(client, record.AppPolicy);
+                    }
                 }
 
                 System.Diagnostics.Debug.WriteLine($"客户端注册: {client.Name} ({client.IpAddress})");
@@ -544,6 +550,15 @@ namespace ControlTimeService
                 var record = _registry.Get(clientId);
                 if (record != null)
                 {
+                    // 如果注册表无配置，尝试从独立配置文件加载
+                    if (record.Config == null || record.Config.Count == 0)
+                    {
+                        var clientRecord = _registry.LoadClientConfig(clientId);
+                        if (clientRecord != null)
+                        {
+                            record = clientRecord;
+                        }
+                    }
                     var info = record.ToClientInfo(false);
                     info.ClientMessages = SortMessagesNewestFirst(info.ClientMessages);
                     var json = JsonSerializer.Serialize(info, JsonOptions);
@@ -560,6 +575,23 @@ namespace ControlTimeService
         {
             var record = _registry.Get(client.Id);
             var messages = client.ClientMessages ?? record?.ClientMessages;
+            var config = record?.Config ?? client.Config;
+            var appPolicy = record?.AppPolicy ?? client.AppPolicy;
+
+            // 如果注册表无配置，尝试从独立配置文件加载
+            if (config == null || config.Count == 0)
+            {
+                var clientRecord = _registry.LoadClientConfig(client.Id);
+                if (clientRecord?.Config != null && clientRecord.Config.Count > 0)
+                {
+                    config = clientRecord.Config;
+                }
+                if (clientRecord?.AppPolicy != null)
+                {
+                    appPolicy = clientRecord.AppPolicy;
+                }
+            }
+
             return new ClientInfo
             {
                 Id = client.Id,
@@ -569,8 +601,8 @@ namespace ControlTimeService
                 LastHeartbeat = client.LastHeartbeat,
                 Status = client.Status,
                 AppVersion = client.AppVersion,
-                Config = record?.Config ?? client.Config,
-                AppPolicy = record?.AppPolicy ?? client.AppPolicy,
+                Config = config,
+                AppPolicy = appPolicy,
                 RemainingSeconds = client.RemainingSeconds,
                 TotalUsageSecondsToday = client.TotalUsageSecondsToday,
                 IsResting = client.IsResting,
@@ -701,6 +733,7 @@ namespace ControlTimeService
 
             var mergedConfig = TimeConfigManager.MergeConfig(existingConfig, configData);
             _registry.SaveConfig(clientId, mergedConfig);
+            SyncAppPolicyFromConfig(clientId, mergedConfig);
 
             if (_clients.ContainsKey(clientId))
             {
@@ -739,11 +772,15 @@ namespace ControlTimeService
                         kvp.Value.AllowWeChatMiniGames = policy.AllowWeChatMiniGames;
                         kvp.Value.AllowMaoxiang = policy.AllowMaoxiang;
                         kvp.Value.AllowDouyin = policy.AllowDouyin;
+                        kvp.Value.AllowKuaishou = policy.AllowKuaishou;
                         kvp.Value.AllowFanqieNovel = policy.AllowFanqieNovel;
                         kvp.Value.AllowTencentAppStore = policy.AllowTencentAppStore;
                         kvp.Value.AllowOtherGames = policy.AllowOtherGames;
+                        kvp.Value.BlockDouyinGameVideos = policy.BlockDouyinGameVideos;
+                        kvp.Value.MonitorDoubao = policy.MonitorDoubao;
                     }
                     _registry.SaveConfig(clientId, clientInfo.Config);
+                    SyncAppPolicyFromConfig(clientId, clientInfo.Config);
                     QueueConfigCommand(clientInfo, clientInfo.Config);
                     SendResponse(response, 200, "App policy merged into config; update command sent");
                 }
@@ -757,9 +794,44 @@ namespace ControlTimeService
             }
             else
             {
+                var registryConfig = _registry.Get(clientId)?.Config;
+                if (registryConfig != null)
+                {
+                    foreach (var kvp in registryConfig)
+                    {
+                        kvp.Value.AllowVideo = policy.AllowVideo;
+                        kvp.Value.AllowWeChatMiniGames = policy.AllowWeChatMiniGames;
+                        kvp.Value.AllowMaoxiang = policy.AllowMaoxiang;
+                        kvp.Value.AllowDouyin = policy.AllowDouyin;
+                        kvp.Value.AllowKuaishou = policy.AllowKuaishou;
+                        kvp.Value.AllowFanqieNovel = policy.AllowFanqieNovel;
+                        kvp.Value.AllowTencentAppStore = policy.AllowTencentAppStore;
+                        kvp.Value.AllowOtherGames = policy.AllowOtherGames;
+                        kvp.Value.BlockDouyinGameVideos = policy.BlockDouyinGameVideos;
+                        kvp.Value.MonitorDoubao = policy.MonitorDoubao;
+                    }
+                    _registry.SaveConfig(clientId, registryConfig);
+                }
+
                 _registry.SaveAppPolicy(clientId, policy);
                 SendResponse(response, 200, "App policy saved; will apply when client connects");
             }
+        }
+
+        /// <summary>
+        /// 将日程配置中的应用权限同步到 AppPolicy 快照，避免客户端重连时被旧 AppPolicy 覆盖。
+        /// </summary>
+        private void SyncAppPolicyFromConfig(string clientId, Dictionary<string, DaySchedule> config)
+        {
+            if (string.IsNullOrEmpty(clientId) || config == null || config.Count == 0)
+                return;
+
+            var todayKey = DateTime.Now.DayOfWeek.ToString();
+            if (!config.TryGetValue(todayKey, out var schedule))
+                schedule = config.Values.FirstOrDefault();
+
+            if (schedule != null)
+                _registry.SaveAppPolicy(clientId, schedule.ToAppPolicy());
         }
 
         private void HandlePauseClient(HttpListenerRequest request, HttpListenerResponse response)

@@ -137,6 +137,7 @@ namespace ControlTimeService
             EnsureRecord(clientId);
             _records[clientId].Config = config;
             Save();
+            SaveClientConfig(clientId);
         }
 
         public void SaveAppPolicy(string clientId, AppPolicy policy)
@@ -144,6 +145,7 @@ namespace ControlTimeService
             EnsureRecord(clientId);
             _records[clientId].AppPolicy = policy;
             Save();
+            SaveClientConfig(clientId);
         }
 
         public void SaveMessages(string clientId, List<ClientMessage> messages)
@@ -185,6 +187,25 @@ namespace ControlTimeService
                     .Where(r => !string.IsNullOrEmpty(r.Id))
                     .GroupBy(r => r.Id)
                     .ToDictionary(g => g.Key, g => g.Last());
+
+                // 从独立配置文件补充缺失的配置与策略
+                foreach (var record in _records.Values)
+                {
+                    var needConfig = record.Config == null || record.Config.Count == 0;
+                    var needPolicy = record.AppPolicy == null;
+                    if (!needConfig && !needPolicy)
+                        continue;
+
+                    var clientConfig = LoadClientConfig(record.Id);
+                    if (clientConfig == null)
+                        continue;
+
+                    if (needConfig && clientConfig.Config != null && clientConfig.Config.Count > 0)
+                        record.Config = clientConfig.Config;
+
+                    if (needPolicy && clientConfig.AppPolicy != null)
+                        record.AppPolicy = clientConfig.AppPolicy;
+                }
             }
             catch (Exception ex)
             {
@@ -197,11 +218,58 @@ namespace ControlTimeService
             try
             {
                 var json = JsonSerializer.Serialize(_records.Values.ToList(), JsonOptions);
-                File.WriteAllText(_path, json);
+                // 原子写入：先写临时文件再替换，防止写入中途失败导致数据丢失
+                var tempPath = _path + ".tmp";
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, _path, overwrite: true);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"保存客户端注册表失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 保存单个客户端配置到独立 JSON 文件（按客户端 ID 命名），确保设置持久化
+        /// </summary>
+        public void SaveClientConfig(string clientId)
+        {
+            try
+            {
+                var record = Get(clientId);
+                if (record == null) return;
+
+                var clientPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_configs");
+                Directory.CreateDirectory(clientPath);
+                var filePath = Path.Combine(clientPath, $"{clientId}.json");
+                var json = JsonSerializer.Serialize(record, JsonOptions);
+                var tempPath = filePath + ".tmp";
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, filePath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"保存客户端配置失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 从独立 JSON 文件加载客户端配置（如果存在）
+        /// </summary>
+        public StoredClientRecord LoadClientConfig(string clientId)
+        {
+            try
+            {
+                var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_configs", $"{clientId}.json");
+                if (!File.Exists(filePath)) return null;
+
+                var json = File.ReadAllText(filePath);
+                return JsonSerializer.Deserialize<StoredClientRecord>(json, JsonOptions);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"加载客户端配置失败: {ex.Message}");
+                return null;
             }
         }
     }

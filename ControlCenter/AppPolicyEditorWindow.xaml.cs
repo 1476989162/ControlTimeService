@@ -20,6 +20,7 @@ namespace ControlCenter
         private CheckBox _allowWeChatMiniGamesCheck;
         private CheckBox _allowMaoxiangCheck;
         private CheckBox _allowDouyinCheck;
+        private CheckBox _allowKuaishouCheck;
         private CheckBox _allowFanqieNovelCheck;
         private CheckBox _allowTencentAppStoreCheck;
         private CheckBox _allowOtherGamesCheck;
@@ -39,7 +40,7 @@ namespace ControlCenter
         {
             Title = $"应用权限 - {_client.Name}";
             Width = 450;
-            Height = 380;
+            Height = 420;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
             var root = new Grid { Margin = new Thickness(15) };
@@ -59,6 +60,7 @@ namespace ControlCenter
             _allowWeChatMiniGamesCheck = CreateCheckBox("允许微信小游戏", _policy.AllowWeChatMiniGames);
             _allowMaoxiangCheck = CreateCheckBox("允许猫箱", _policy.AllowMaoxiang);
             _allowDouyinCheck = CreateCheckBox("允许抖音", _policy.AllowDouyin);
+            _allowKuaishouCheck = CreateCheckBox("允许快手", _policy.AllowKuaishou);
             _allowFanqieNovelCheck = CreateCheckBox("允许番茄小说", _policy.AllowFanqieNovel);
             _allowTencentAppStoreCheck = CreateCheckBox("允许腾讯应用宝（不含其内游戏）", _policy.AllowTencentAppStore);
             _allowOtherGamesCheck = CreateCheckBox("允许其他游戏（Steam 等）", _policy.AllowOtherGames);
@@ -67,6 +69,7 @@ namespace ControlCenter
             stackPanel.Children.Add(_allowWeChatMiniGamesCheck);
             stackPanel.Children.Add(_allowMaoxiangCheck);
             stackPanel.Children.Add(_allowDouyinCheck);
+            stackPanel.Children.Add(_allowKuaishouCheck);
             stackPanel.Children.Add(_allowFanqieNovelCheck);
             stackPanel.Children.Add(_allowTencentAppStoreCheck);
             stackPanel.Children.Add(_allowOtherGamesCheck);
@@ -113,6 +116,7 @@ namespace ControlCenter
                     AllowWeChatMiniGames = _allowWeChatMiniGamesCheck.IsChecked ?? false,
                     AllowMaoxiang = _allowMaoxiangCheck.IsChecked ?? false,
                     AllowDouyin = _allowDouyinCheck.IsChecked ?? false,
+                    AllowKuaishou = _allowKuaishouCheck.IsChecked ?? false,
                     AllowFanqieNovel = _allowFanqieNovelCheck.IsChecked ?? false,
                     AllowTencentAppStore = _allowTencentAppStoreCheck.IsChecked ?? false,
                     AllowOtherGames = _allowOtherGamesCheck.IsChecked ?? false

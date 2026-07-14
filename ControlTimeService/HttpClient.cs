@@ -139,6 +139,9 @@ namespace ControlTimeService
                 {
                     _isRegistered = true;
                     System.Diagnostics.Debug.WriteLine("成功注册到控制端服务器！");
+                    
+                    // 注册成功后立即轮询一次，获取服务器端保存的配置更新
+                    RequestImmediatePoll();
                 }
                 else
                 {

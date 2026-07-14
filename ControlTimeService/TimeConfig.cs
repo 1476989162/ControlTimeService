@@ -61,17 +61,19 @@ namespace ControlTimeService
         [JsonPropertyName("allowVideo")]
         public bool AllowVideo { get; set; } = false;
         [JsonPropertyName("allowWeChatMiniGames")]
-        public bool AllowWeChatMiniGames { get; set; } = false;
+        public bool AllowWeChatMiniGames { get; set; } = true;
         [JsonPropertyName("allowMaoxiang")]
         public bool AllowMaoxiang { get; set; } = true;
         [JsonPropertyName("allowDouyin")]
-        public bool AllowDouyin { get; set; } = false;
+        public bool AllowDouyin { get; set; } = true;
+        [JsonPropertyName("allowKuaishou")]
+        public bool AllowKuaishou { get; set; } = true;
         [JsonPropertyName("allowFanqieNovel")]
         public bool AllowFanqieNovel { get; set; } = true;
         [JsonPropertyName("allowTencentAppStore")]
         public bool AllowTencentAppStore { get; set; } = true;
         [JsonPropertyName("allowOtherGames")]
-        public bool AllowOtherGames { get; set; } = false;
+        public bool AllowOtherGames { get; set; } = true;
 
         // 抖音游戏视频监控（AllowDouyin=true 时仍拦截游戏内容）
         [JsonPropertyName("blockDouyinGameVideos")]
@@ -90,6 +92,7 @@ namespace ControlTimeService
                 AllowWeChatMiniGames = AllowWeChatMiniGames,
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
+                AllowKuaishou = AllowKuaishou,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -122,6 +125,7 @@ namespace ControlTimeService
                 AllowWeChatMiniGames = AllowWeChatMiniGames,
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
+                AllowKuaishou = AllowKuaishou,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -140,21 +144,26 @@ namespace ControlTimeService
                 return existing?.Clone() ?? new DaySchedule();
 
             var result = (existing ?? new DaySchedule()).Clone();
-            result.UsageMinutes = incoming.UsageMinutes;
-            result.RestMinutes = incoming.RestMinutes;
+            if (incoming.UsageMinutes > 0)
+                result.UsageMinutes = incoming.UsageMinutes;
+            if (incoming.RestMinutes > 0)
+                result.RestMinutes = incoming.RestMinutes;
             result.Enabled = incoming.Enabled;
 
             // 逐字段合并：只要 incoming 提供了有效值就覆盖。
             // 不再以单个字段（如 LunchStartTime）作为整体开关，
             // 避免部分下发（Web 端、轻量编辑器）导致扩展配置被忽略而不生效。
             result.LunchRestrictionEnabled = incoming.LunchRestrictionEnabled;
-            result.LunchMaxUsageMinutes = incoming.LunchMaxUsageMinutes;
+            // 允许下发 0（关闭上限）；仅跳过未提供的负值哨兵
+            if (incoming.LunchMaxUsageMinutes >= 0)
+                result.LunchMaxUsageMinutes = incoming.LunchMaxUsageMinutes;
             if (!string.IsNullOrWhiteSpace(incoming.LunchStartTime))
                 result.LunchStartTime = incoming.LunchStartTime;
             if (!string.IsNullOrWhiteSpace(incoming.LunchEndTime))
                 result.LunchEndTime = incoming.LunchEndTime;
             result.EveningRestrictionEnabled = incoming.EveningRestrictionEnabled;
-            result.EveningMaxUsageMinutes = incoming.EveningMaxUsageMinutes;
+            if (incoming.EveningMaxUsageMinutes >= 0)
+                result.EveningMaxUsageMinutes = incoming.EveningMaxUsageMinutes;
             if (!string.IsNullOrWhiteSpace(incoming.EveningStartTime))
                 result.EveningStartTime = incoming.EveningStartTime;
             if (!string.IsNullOrWhiteSpace(incoming.EveningEndTime))
@@ -169,6 +178,7 @@ namespace ControlTimeService
             result.AllowWeChatMiniGames = incoming.AllowWeChatMiniGames;
             result.AllowMaoxiang = incoming.AllowMaoxiang;
             result.AllowDouyin = incoming.AllowDouyin;
+            result.AllowKuaishou = incoming.AllowKuaishou;
             result.AllowFanqieNovel = incoming.AllowFanqieNovel;
             result.AllowTencentAppStore = incoming.AllowTencentAppStore;
             result.AllowOtherGames = incoming.AllowOtherGames;
@@ -223,9 +233,37 @@ namespace ControlTimeService
             LoadFromFile();
         }
 
+        /// <summary>
+        /// 是否处于暑假模式（每年 7月1日 ~ 8月31日）。
+        /// 暑假模式下覆盖当天配置：30分钟解锁/60分钟休息循环，8:00-20:30 可用，其余时段锁屏。
+        /// </summary>
+        public static bool IsSummerMode(DateTime now)
+        {
+            return now >= new DateTime(now.Year, 7, 1) && now < new DateTime(now.Year, 9, 1);
+        }
+
+        /// <summary>将暑假规则覆盖到给定 schedule 上（不修改应用权限字段）。</summary>
+        public static void ApplySummerOverride(DaySchedule schedule)
+        {
+            if (schedule == null) return;
+            schedule.UsageMinutes = 30;
+            schedule.RestMinutes = 60;
+            schedule.MorningLockEnabled = true;
+            schedule.MorningUnlockTime = "08:00";
+            schedule.NightShutdownTime = "20:30";
+            // 暑假模式由 8:00-20:30 整体窗口控制，禁用午间/晚间细分规则避免冲突
+            schedule.LunchRestrictionEnabled = false;
+            schedule.EveningRestrictionEnabled = false;
+        }
+
         public DaySchedule GetScheduleForToday()
         {
-            return _schedules[DateTime.Now.DayOfWeek];
+            var schedule = _schedules[DateTime.Now.DayOfWeek].Clone();
+            if (IsSummerMode(DateTime.Now))
+            {
+                ApplySummerOverride(schedule);
+            }
+            return schedule;
         }
 
         public DaySchedule GetSchedule(DayOfWeek day)
@@ -353,7 +391,9 @@ namespace ControlTimeService
         }
 
         /// <summary>
-        /// 从旧版 app_policy.json 迁移全局应用权限到所有 DaySchedule
+        /// 从旧版 app_policy.json 迁移全局应用权限到所有 DaySchedule。
+        /// 仅在 time_config 尚未包含应用权限字段时迁移一次，随后删除遗留文件，
+        /// 避免每次重启用旧策略覆盖已保存的番茄/抖音等权限。
         /// </summary>
         private void MigrateAppPolicyFromLegacyFile()
         {
@@ -363,10 +403,39 @@ namespace ControlTimeService
                 if (!File.Exists(legacyPath))
                     return;
 
+                // time_config 已含应用权限时，说明已迁移或由管理端下发过
+                if (File.Exists(_configPath))
+                {
+                    var existingJson = File.ReadAllText(_configPath);
+                    if (existingJson.IndexOf("allowFanqieNovel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        existingJson.IndexOf("allowDouyin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        existingJson.IndexOf("allowMaoxiang", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        // 修复历史 bug：旧 app_policy 无番茄字段时，每次启动都会把 AllowFanqieNovel 刷成 false
+                        var legacyText = File.ReadAllText(legacyPath);
+                        if (legacyText.IndexOf("allowFanqieNovel", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            var repaired = false;
+                            foreach (var schedule in _schedules.Values)
+                            {
+                                if (!schedule.AllowFanqieNovel)
+                                {
+                                    schedule.AllowFanqieNovel = true;
+                                    repaired = true;
+                                }
+                            }
+                            if (repaired)
+                                SaveToFile();
+                        }
+
+                        TryRemoveLegacyAppPolicyFile(legacyPath);
+                        return;
+                    }
+                }
+
                 var legacyJson = File.ReadAllText(legacyPath);
-                var legacyPolicy = JsonSerializer.Deserialize<AppPolicy>(legacyJson);
-                if (legacyPolicy == null)
-                    return;
+                // 属性已带默认值；旧文件缺字段时不会把番茄等权限写成 false
+                var legacyPolicy = JsonSerializer.Deserialize<AppPolicy>(legacyJson) ?? AppPolicy.CreateDefault();
 
                 foreach (var schedule in _schedules.Values)
                 {
@@ -374,17 +443,35 @@ namespace ControlTimeService
                     schedule.AllowWeChatMiniGames = legacyPolicy.AllowWeChatMiniGames;
                     schedule.AllowMaoxiang = legacyPolicy.AllowMaoxiang;
                     schedule.AllowDouyin = legacyPolicy.AllowDouyin;
+                    schedule.AllowKuaishou = legacyPolicy.AllowKuaishou;
                     schedule.AllowFanqieNovel = legacyPolicy.AllowFanqieNovel;
                     schedule.AllowTencentAppStore = legacyPolicy.AllowTencentAppStore;
                     schedule.AllowOtherGames = legacyPolicy.AllowOtherGames;
+                    schedule.BlockDouyinGameVideos = legacyPolicy.BlockDouyinGameVideos;
+                    schedule.DouyinGameVideoThresholdSeconds = legacyPolicy.DouyinGameVideoThresholdSeconds;
+                    schedule.MonitorDoubao = legacyPolicy.MonitorDoubao;
                 }
 
                 SaveToFile();
+                TryRemoveLegacyAppPolicyFile(legacyPath);
                 System.Diagnostics.Debug.WriteLine($"已从 {legacyPath} 迁移应用权限到每天配置");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"迁移旧版应用权限失败: {ex.Message}");
+            }
+        }
+
+        private static void TryRemoveLegacyAppPolicyFile(string legacyPath)
+        {
+            try
+            {
+                if (File.Exists(legacyPath))
+                    File.Delete(legacyPath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"删除旧版 app_policy.json 失败: {ex.Message}");
             }
         }
 

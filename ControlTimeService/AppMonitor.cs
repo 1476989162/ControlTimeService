@@ -91,8 +91,11 @@ namespace ControlTimeService
                 return;
             }
 
-            // AllowDouyin=false 时已在全进程扫描中立即拦截
-            if (!_policy.AllowDouyin)
+            // 抖音全禁时仍可能需要监控快手游戏视频；仅当抖音/豆包/快手都不需要前台监控时才退出
+            bool needDouyinTrack = _policy.AllowDouyin;
+            bool needDoubaoTrack = _policy.MonitorDoubao;
+            bool needKuaishouTrack = _policy.AllowKuaishou;
+            if (!needDouyinTrack && !needDoubaoTrack && !needKuaishouTrack)
             {
                 ResetDouyinGameTracking();
                 return;
@@ -133,10 +136,21 @@ namespace ControlTimeService
                 }
 
                 string processName = process.ProcessName;
-                bool isTargetApp = IsDouyin(processName, windowTitle) ||
-                    (_policy.MonitorDoubao && IsDoubao(processName, windowTitle));
+                bool isTargetApp =
+                    (needDouyinTrack && IsDouyin(processName, windowTitle)) ||
+                    (needDoubaoTrack && IsDoubao(processName, windowTitle)) ||
+                    (needKuaishouTrack && IsKuaishou(processName, windowTitle));
 
-                if (!isTargetApp || !IsDouyinGameContent(processName, windowTitle))
+                if (!isTargetApp)
+                {
+                    ResetDouyinGameTracking();
+                    return;
+                }
+
+                bool isGameContent = IsDouyinGameContent(processName, windowTitle) ||
+                    (needKuaishouTrack && IsKuaishou(processName, windowTitle) && IsKuaishouGameContent(processName, windowTitle));
+
+                if (!isGameContent)
                 {
                     ResetDouyinGameTracking();
                     return;
@@ -167,9 +181,9 @@ namespace ControlTimeService
 
                 if (elapsed >= threshold)
                 {
-                    var reason = IsDoubao(processName, windowTitle)
-                        ? $"豆包内游戏视频: {windowTitle}"
-                        : $"抖音游戏视频: {windowTitle}";
+                    string appLabel = IsKuaishou(processName, windowTitle) ? "快手游戏视频" :
+                        IsDoubao(processName, windowTitle) ? "豆包内游戏视频" : "抖音游戏视频";
+                    var reason = $"{appLabel}: {windowTitle}";
 
                     TerminateProcess(process);
                     ResetDouyinGameTracking();
@@ -217,6 +231,12 @@ namespace ControlTimeService
                 return true;
             }
 
+            if (!_policy.AllowKuaishou && IsKuaishou(processName, windowTitle))
+            {
+                reason = $"快手: {windowTitle}";
+                return true;
+            }
+
             if (!_policy.AllowMaoxiang && IsMaoxiang(processName, windowTitle))
             {
                 reason = $"猫箱: {windowTitle}";
@@ -235,7 +255,7 @@ namespace ControlTimeService
                 return true;
             }
 
-            // 应用宝内游戏始终拦截
+            // 应用宝内游戏：始终拦截（猫箱、番茄在 IsExplicitlyAllowedApp 和 IsTencentAppStoreGame 内部已排除）
             if (IsTencentAppStoreGame(processName, windowTitle))
             {
                 reason = $"应用宝游戏: {processName} - {windowTitle}";
@@ -264,6 +284,9 @@ namespace ControlTimeService
                 return true;
             if (_policy.AllowFanqieNovel && IsFanqieNovel(processName, windowTitle))
                 return true;
+            if (_policy.AllowKuaishou && IsKuaishou(processName, windowTitle))
+                return true;
+            // 不在此处调用 IsTencentAppStore，避免与 IsTencentAppStoreGame 形成递归
             return false;
         }
 
@@ -324,6 +347,32 @@ namespace ControlTimeService
             return title.Contains("抖音", StringComparison.OrdinalIgnoreCase);
         }
 
+        private bool IsKuaishou(string processName, string title)
+        {
+            string[] kuaishouProcesses = { "kuaishou", "Kuaishou", "kwai", "Kwai", "ksapp", "KSApp", "kwailive", "KwaiLive" };
+            if (kuaishouProcesses.Any(p => processName.Contains(p, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            return title.Contains("快手", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool IsKuaishouGameContent(string processName, string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return false;
+
+            string[] gameKeywords = {
+                "游戏", "小游戏", "秒玩", "即玩", "试玩", "休闲", "闯关",
+                "快手游戏", "快手小游戏", "即点即玩", "电竞", "手游", "端游",
+                "王者", "原神", "吃鸡", "和平精英", "英雄联盟", "LOL",
+                "实况", "攻略", "解说", "通关", "战绩", "排位", "Steam",
+                "minecraft", "我的世界", "蛋仔", "蛋仔派对", "迷你世界", "第五人格",
+                "明日方舟", "崩坏", "阴阳师", "火影", "CF", "DNF"
+            };
+
+            return gameKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
+        }
+
         private bool IsDoubao(string processName, string title)
         {
             string[] doubaoProcesses = { "doubao", "Doubao", "flow", "byteflow", "coze" };
@@ -381,8 +430,8 @@ namespace ControlTimeService
         private bool IsFanqieNovel(string processName, string title)
         {
             string[] fanqieProcesses = {
-                "fanqie", "Fanqie", "dragonread", "DragonRead", "novelfm", "NovelFm",
-                "hongguo", "HongGuo", "changdu", "ChangDu", "drread", "DrRead"
+                "fanqie", "fanqienovel", "dragonread", "novelfm",
+                "hongguo", "changdu", "drread", "fqreader"
             };
             if (fanqieProcesses.Any(p => processName.Contains(p, StringComparison.OrdinalIgnoreCase)))
                 return true;
@@ -390,7 +439,11 @@ namespace ControlTimeService
             string[] fanqieTitleKeywords = {
                 "番茄小说", "番茄畅听", "番茄免费小说", "红果短剧", "红果", "常读", "番茄"
             };
-            return fanqieTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
+            if (fanqieTitleKeywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            // 应用宝容器内：仅当标题能确认是番茄系内容时才放行，避免把容器里的游戏当成番茄
+            return false;
         }
 
         private bool IsVideo(string processName, string title)
@@ -420,6 +473,9 @@ namespace ControlTimeService
 
         private bool IsTencentAppStore(string processName, string title)
         {
+            if (_policy.AllowFanqieNovel && IsFanqieNovel(processName, title))
+                return false;
+
             string[] storeProcesses = { "pcyyb", "appmarket", "YYBMarket", "TencentAppStore" };
             if (storeProcesses.Any(p => processName.Equals(p, StringComparison.OrdinalIgnoreCase) ||
                                         processName.Contains(p, StringComparison.OrdinalIgnoreCase)))
@@ -438,7 +494,10 @@ namespace ControlTimeService
 
         private bool IsTencentAppStoreGame(string processName, string title)
         {
-            if (IsExplicitlyAllowedApp(processName, title))
+            // 允许的猫箱/番茄不按应用宝游戏拦截（勿回调 IsExplicitlyAllowedApp，避免递归）
+            if (_policy.AllowMaoxiang && IsMaoxiang(processName, title))
+                return false;
+            if (_policy.AllowFanqieNovel && IsFanqieNovel(processName, title))
                 return false;
 
             string[] dedicatedGameProcesses = { "txgame", "TGB", "GameAssist", "MobileGamePC" };

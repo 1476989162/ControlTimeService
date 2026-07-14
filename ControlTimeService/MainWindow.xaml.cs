@@ -288,7 +288,16 @@ namespace ControlTimeService
             int usage, rest;
             GetDurationsForNow(out usage, out rest);
 
-            _targetTime = DateTime.Now.AddMinutes(customUsageMinutes ?? usage);
+            if (customUsageMinutes.HasValue)
+            {
+                _targetTime = DateTime.Now.AddMinutes(customUsageMinutes.Value);
+            }
+            else
+            {
+                _targetTime = DateTime.Now.AddMinutes(usage);
+            }
+
+            CapTargetTimeToLunchAllowance(DateTime.Now);
             SaveState();
         }
 
@@ -570,10 +579,10 @@ namespace ControlTimeService
         {
             try
             {
-                // 格式：IsResting|TargetTime|IsShutdownMode|StatsDate|LunchSec|LunchBreaks|EveningSec|IsPasswordRequiredOnly|IsTimingPaused|PausedRemainingSec|IsAppViolationPause
+                // 格式：IsResting|TargetTime|IsShutdownMode|StatsDate|LunchSec|LunchBreaks|EveningSec|IsPasswordRequiredOnly|IsTimingPaused|PausedRemainingSec|IsAppViolationPause|TotalDailyUsageSec|EveningBypass|LunchBypass|MorningBypass|NightShutdownBypassUntil|MorningLockBypassUntil
                 File.WriteAllText(
                     _configPath,
-                    $"{_isResting}|{_targetTime:o}|{_isShutdownMode}|{_usageStatsDate:yyyy-MM-dd}|{_lunchAccumulatedSeconds}|{_lunchBreaksTaken}|{_eveningAccumulatedSeconds}|{_isPasswordRequiredOnly}|{_isTimingPaused}|{_pausedRemainingSeconds}|{_isAppViolationPause}|{_totalDailyUsageSeconds}");
+                    $"{_isResting}|{_targetTime:o}|{_isShutdownMode}|{_usageStatsDate:yyyy-MM-dd}|{_lunchAccumulatedSeconds}|{_lunchBreaksTaken}|{_eveningAccumulatedSeconds}|{_isPasswordRequiredOnly}|{_isTimingPaused}|{_pausedRemainingSeconds}|{_isAppViolationPause}|{_totalDailyUsageSeconds}|{_eveningPasswordBypassActive}|{_lunchPasswordBypassActive}|{_morningPasswordBypassActive}|{_nightShutdownBypassUntil:o}|{_morningLockBypassUntil:o}");
             }
             catch { }
         }
@@ -583,15 +592,18 @@ namespace ControlTimeService
             bool loaded = false;
             var now = DateTime.Now;
 
+            // 先恢复密码绕过状态，使夜间/早晨锁判断能正确尊重已解锁的绕过
+            LoadBypassState();
+
             // 开机启动时在夜间关机时段自动进入锁屏
-            if (IsNightlyShutdownTime(now))
+            if (IsNightlyShutdownTime(now) && now > _nightShutdownBypassUntil)
             {
                 StartRestMode(null, true);
                 return;
             }
 
             // 开机启动时在早晨锁定时段自动进入锁屏
-            if (IsMorningLockTime(now))
+            if (IsMorningLockTime(now) && now > _morningLockBypassUntil)
             {
                 StartMorningLock(now);
                 return;
@@ -619,6 +631,11 @@ namespace ControlTimeService
                     if (data.Length >= 10) double.TryParse(data[9], out _pausedRemainingSeconds);
                     if (data.Length >= 11) bool.TryParse(data[10], out _isAppViolationPause);
                     if (data.Length >= 12) double.TryParse(data[11], out _totalDailyUsageSeconds);
+                    if (data.Length >= 13) bool.TryParse(data[12], out _eveningPasswordBypassActive);
+                    if (data.Length >= 14) bool.TryParse(data[13], out _lunchPasswordBypassActive);
+                    if (data.Length >= 15) bool.TryParse(data[14], out _morningPasswordBypassActive);
+                    if (data.Length >= 16 && DateTime.TryParse(data[15], out var nightBypass)) _nightShutdownBypassUntil = nightBypass;
+                    if (data.Length >= 17 && DateTime.TryParse(data[16], out var morningBypass)) _morningLockBypassUntil = morningBypass;
 
                     if (savedIsTimingPaused)
                     {
@@ -692,6 +709,27 @@ namespace ControlTimeService
             _lastLogicTick = DateTime.Now;
         }
 
+        /// <summary>
+        /// 从 state.txt 预读密码绕过状态（不恢复完整运行状态），
+        /// 使 LoadState 中的夜间/早晨锁判断能正确尊重已解锁的绕过。
+        /// </summary>
+        private void LoadBypassState()
+        {
+            if (!File.Exists(_configPath))
+                return;
+
+            try
+            {
+                var data = File.ReadAllText(_configPath).Split('|');
+                if (data.Length >= 13) bool.TryParse(data[12], out _eveningPasswordBypassActive);
+                if (data.Length >= 14) bool.TryParse(data[13], out _lunchPasswordBypassActive);
+                if (data.Length >= 15) bool.TryParse(data[14], out _morningPasswordBypassActive);
+                if (data.Length >= 16 && DateTime.TryParse(data[15], out var nightBypass)) _nightShutdownBypassUntil = nightBypass;
+                if (data.Length >= 17 && DateTime.TryParse(data[16], out var morningBypass)) _morningLockBypassUntil = morningBypass;
+            }
+            catch { }
+        }
+
         private void GetDurationsForNow(out int usageMinutes, out int restMinutes)
         {
             var schedule = _configManager.GetScheduleForToday();
@@ -723,6 +761,36 @@ namespace ControlTimeService
         {
             var schedule = _configManager.GetScheduleForToday();
             return now.Date + schedule.GetLunchEndTime();
+        }
+
+        private double GetRemainingLunchUsageSeconds(DateTime now)
+        {
+            var schedule = _configManager.GetScheduleForToday();
+            if (!schedule.LunchRestrictionEnabled || schedule.LunchMaxUsageMinutes <= 0)
+                return double.MaxValue;
+
+            return Math.Max(0, schedule.LunchMaxUsageMinutes * 60 - _lunchAccumulatedSeconds);
+        }
+
+        /// <summary>
+        /// 午间仅限制累计使用上限，不替换正常使用/休息周期；必要时缩短当前阶段剩余时间。
+        /// </summary>
+        private void CapTargetTimeToLunchAllowance(DateTime now)
+        {
+            var schedule = _configManager.GetScheduleForToday();
+            if (!schedule.LunchRestrictionEnabled || !IsLunchRestrictedWindow(now))
+                return;
+
+            var lunchRemaining = GetRemainingLunchUsageSeconds(now);
+            if (lunchRemaining <= 0 || lunchRemaining >= double.MaxValue)
+                return;
+
+            var maxTarget = now.AddSeconds(lunchRemaining);
+            if (_targetTime > maxTarget)
+            {
+                _targetTime = maxTarget;
+                SaveState();
+            }
         }
 
         private bool IsNightlyShutdownTime(DateTime now)
@@ -825,18 +893,15 @@ namespace ControlTimeService
             if (IsLunchRestrictedWindow(now))
             {
                 if (!_lunchPasswordBypassActive &&
+                    schedule.LunchMaxUsageMinutes > 0 &&
                     _lunchAccumulatedSeconds >= schedule.LunchMaxUsageMinutes * 60)
                 {
                     StartRestMode(GetLunchWindowEnd(now), false, false);
                     return;
                 }
 
-                if (_lunchBreaksTaken < 1 && _lunchAccumulatedSeconds >= 30 * 60)
-                {
-                    _lunchBreaksTaken++;
-                    StartRestMode(now.AddMinutes(15), false, false);
-                    return;
-                }
+                if (!_isResting && !_isShutdownMode && !_isTimingPaused)
+                    CapTargetTimeToLunchAllowance(now);
 
                 // 午间时段不评估晚间规则
                 return;
@@ -986,6 +1051,7 @@ namespace ControlTimeService
             if (Math.Abs(remaining - maxSeconds) > 1)
             {
                 _targetTime = DateTime.Now.AddSeconds(maxSeconds);
+                CapTargetTimeToLunchAllowance(DateTime.Now);
                 SaveState();
             }
         }
