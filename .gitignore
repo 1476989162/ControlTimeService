@@ -361,3 +361,11 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# 本地发布/构建产物（覆盖 Win/Android 各版本），不纳入版本库
+_publish/
+
+# 本地工具/助手工作目录，不属于项目源码
+.freebuff/
+.workbuddy-ai/
+.reasonix/

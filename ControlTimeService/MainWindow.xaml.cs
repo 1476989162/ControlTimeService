@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -6,6 +6,8 @@ using System.Windows;
 using System.Windows.Forms; // 需引用 System.Windows.Forms
 using System.Windows.Threading;
 using System.Diagnostics;
+using System.Diagnostics.Eventing.Reader;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace ControlTimeService
@@ -14,6 +16,7 @@ namespace ControlTimeService
     {
         private DispatcherTimer _logicTimer = new DispatcherTimer();
         private System.Windows.Threading.DispatcherTimer _statusTimer;
+        private System.Windows.Threading.DispatcherTimer _watchdogTimer;
 
         // 核心变量
         private DateTime _targetTime; // 当前阶段的结束时间点
@@ -33,18 +36,37 @@ namespace ControlTimeService
         private bool _lunchPasswordBypassActive = false;
         private DateTime _nightShutdownBypassUntil = DateTime.MinValue;
         private DateTime _morningLockBypassUntil = DateTime.MinValue;
+        private DateTime _dayDisabledBypassUntil = DateTime.MinValue;
         private bool _isAppViolationPause = false;
         private bool _isMorningLockMode = false;
         private bool _morningPasswordBypassActive = false;
         private DateTime _appBlockCooldownUntil = DateTime.MinValue;
         private DateTime _lastLogicTick = DateTime.Now;
         private readonly ConcurrentQueue<Action> _remoteCommandQueue = new();
+        private readonly ConcurrentQueue<Action> _priorityRemoteCommandQueue = new();
         private bool _suppressLockReopen = false;
+        private DateTime _remoteUnlockUntil = DateTime.MinValue;
         private string _pendingUpdateUrl;
         private string _pendingUpdateVersion;
 
+        // 开屏/锁屏累计与完整性校验（从每天开机时刻起算）
+        private double _lockedSecondsToday = 0;                 // 今日累计锁屏秒（休息/夜间/暂停/早晨锁）
+        private DateTime _integrityAnchor = DateTime.MinValue;  // 完整性锚点（开机时刻/零点/重授权）
+        private double _countedSecondsAtAnchor = 0;             // 锚点时刻已累计(开屏+锁屏)秒
+        private double _sleepGraceSeconds = 0;                  // 锚点后睡眠/休眠豁免秒（不视为缺失）
+        private bool _integrityLockActive = false;              // 完整性密码锁进行中
+        private DateTime _lastStateSave = DateTime.MinValue;    // 周期性落盘节流
+        private const double IntegrityMismatchThresholdSeconds = 600; // 开机至今与(开屏+锁屏)差值超10分钟即锁屏
+
         private string _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "state.txt");
         private string _adminPass = "123456789"; // 管理密码
+
+        [DllImport("kernel32.dll")]
+        private static extern ulong GetTickCount64();
+
+        // 系统本次会话（最近一次开机/快速启动恢复）的开始时刻，启动后计算一次并缓存
+        private DateTime? _systemSessionStart = null;
+        private bool _systemSessionStartResolved = false;
         private NotifyIcon _notifyIcon;
         private AppMonitor _appMonitor;
         private TimeConfigManager _configManager;
@@ -58,6 +80,15 @@ namespace ControlTimeService
         {
             InitializeComponent();
             SetAutoStart();
+            // 最强看门狗：注册表+计划任务每分钟自检，崩溃/被杀1分钟内自动拉起
+            try { CrashLogger.AttachDispatcher(Dispatcher); } catch { }
+            // 看门狗安装内部会同步调用 schtasks（查询/创建各可能阻塞数秒），
+            // 放到后台线程，避免拖住窗口构造与首屏渲染。
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try { WatchdogHelper.EnsureInstalled(); }
+                catch (Exception ex) { Debug.WriteLine($"看门狗初始化失败: {ex.Message}"); }
+            });
             InitNotifyIcon();
 
             // 初始化配置管理器
@@ -69,9 +100,12 @@ namespace ControlTimeService
             _appMonitor.SetPolicy(_appPolicyManager.GetPolicy());
             _appMonitor.OnAppBlocked += (s, e) =>
             {
-                this.Dispatcher.Invoke(() =>
+                // 监控循环已移到后台线程：必须用 BeginInvoke 异步派发，
+                // 用 Invoke 会让后台线程同步等待 UI 线程，锁屏/弹窗时容易互相卡住。
+                this.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (DateTime.Now >= _appBlockCooldownUntil &&
+                        !IsRemoteUnlockActive(DateTime.Now) &&
                         !_isResting &&
                         !_isTimingPaused &&
                         !_isShutdownMode &&
@@ -85,18 +119,27 @@ namespace ControlTimeService
                         "应用限制",
                         $"检测到禁止的应用：{e.AppName}",
                         ToolTipIcon.Warning);
-                });
+
+                    // 推送：违规拦截实时上报控制端（状态里的 lastBlockedApp + 消息记录），
+                    // 家长在控制端 10 秒心跳之外也能立刻看到，不用等下一次定时上报。
+                    ReportStatusToControl();
+                    PushViolationToServer($"【违规拦截 {DateTime.Now:MM-dd HH:mm:ss}】{e.AppName}");
+                }));
             };
             _appMonitor.OnDouyinGameVideoWarning += (s, e) =>
             {
-                this.Dispatcher.Invoke(() =>
+                this.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _notifyIcon?.ShowBalloonTip(
-                        3000,
+                        5000,
                         "游戏视频提醒",
-                        $"检测到游戏视频，{e.RemainingSeconds} 秒后将关闭应用",
+                        $"检测到游戏画面（{e.AppName}），请在 {e.RemainingSeconds} 秒内切走，否则将关闭应用",
                         ToolTipIcon.Warning);
-                });
+
+                    // 推送：游戏视频预警同样实时上报，方便家长知晓孩子正在看游戏内容
+                    ReportStatusToControl();
+                    PushViolationToServer($"【游戏视频提醒 {DateTime.Now:MM-dd HH:mm:ss}】{e.AppName}：{e.WindowTitle}（{e.RemainingSeconds} 秒后关闭）");
+                }));
             };
             _appMonitor.StartMonitoring();
 
@@ -116,7 +159,13 @@ namespace ControlTimeService
 
             _autoUpdater = new AutoUpdater(_controlConfig, message =>
             {
-                _notifyIcon?.ShowBalloonTip(3000, "ControlTimeService 升级", message, ToolTipIcon.Info);
+                // 更新检查在后台线程回调，NotifyIcon 必须在 UI 线程访问
+                try
+                {
+                    this.Dispatcher.BeginInvoke(new Action(() =>
+                        _notifyIcon?.ShowBalloonTip(3000, "ControlTimeService 升级", message, ToolTipIcon.Info)));
+                }
+                catch { }
             });
             _autoUpdater.StartPeriodicCheck();
 
@@ -145,20 +194,42 @@ namespace ControlTimeService
             };
             firstReportTimer.Start();
 
+            // 5. 看门狗自愈：每10分钟检查一次，防止任务被手动删除后防护失效
+            _watchdogTimer = new System.Windows.Threading.DispatcherTimer();
+            _watchdogTimer.Interval = TimeSpan.FromMinutes(10);
+            _watchdogTimer.Tick += (s, e) =>
+            {
+                // 内部 schtasks 查询/创建会阻塞数秒，放后台执行，别占着 UI 线程
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try { WatchdogHelper.EnsureInstalledIfNeeded(); } catch { }
+                });
+            };
+            _watchdogTimer.Start();
+
             // 启动时如果是静默启动可以 Hide，这里为了演示默认 Show，你可以改为 Hide
             // this.Hide(); 
         }
 
-        public void EnqueueRemoteCommand(Action action)
+        public void EnqueueRemoteCommand(Action action, bool highPriority = false)
         {
             if (action != null)
-                _remoteCommandQueue.Enqueue(action);
+            {
+                if (highPriority)
+                    _priorityRemoteCommandQueue.Enqueue(action);
+                else
+                    _remoteCommandQueue.Enqueue(action);
+            }
         }
 
         public void ProcessRemoteCommandQueue()
         {
-            while (_remoteCommandQueue.TryDequeue(out var action))
+            while (true)
             {
+                if (!_priorityRemoteCommandQueue.TryDequeue(out var action) &&
+                    !_remoteCommandQueue.TryDequeue(out action))
+                    break;
+
                 try
                 {
                     action();
@@ -170,49 +241,116 @@ namespace ControlTimeService
             }
         }
 
+        private bool IsRemoteUnlockActive(DateTime now)
+        {
+            return now < _remoteUnlockUntil;
+        }
+
+        private void ClearExpiredRemoteUnlock(DateTime now)
+        {
+            if (_remoteUnlockUntil == DateTime.MinValue || now < _remoteUnlockUntil)
+                return;
+
+            CancelRemoteUnlockOverride();
+        }
+
+        /// <summary>
+        /// 取消远程解锁授权并恢复全部自动管控。
+        /// 服务端锁定/暂停命令无条件生效时调用（最后下发的服务端命令优先）。
+        /// </summary>
+        private void CancelRemoteUnlockOverride()
+        {
+            _remoteUnlockUntil = DateTime.MinValue;
+            _appMonitor?.SetEnforcementOverride(null);
+            _eveningPasswordBypassActive = false;
+            _lunchPasswordBypassActive = false;
+            _morningPasswordBypassActive = false;
+            _nightShutdownBypassUntil = DateTime.MinValue;
+            _morningLockBypassUntil = DateTime.MinValue;
+            _dayDisabledBypassUntil = DateTime.MinValue;
+        }
+
+        private void SetRemoteUnlockOverride(DateTime until)
+        {
+            _remoteUnlockUntil = until;
+            _nightShutdownBypassUntil = until;
+            _morningLockBypassUntil = until;
+            _eveningPasswordBypassActive = true;
+            _lunchPasswordBypassActive = true;
+            _morningPasswordBypassActive = true;
+            _appMonitor?.SetEnforcementOverride(until);
+        }
+
         private void LogicTimer_Tick(object sender, EventArgs e)
         {
             ProcessRemoteCommandQueue();
 
             var now = DateTime.Now;
+            ClearExpiredRemoteUnlock(now);
             ResetDailyUsageIfNeeded(now);
             AccumulateUsage(now);
+            InitializeIntegrityAnchor(now);
 
             TryApplyPendingUpdate();
 
-            if (IsNightlyShutdownTime(now) && !_isShutdownMode && now > _nightShutdownBypassUntil)
+            if (!IsRemoteUnlockActive(now))
             {
-                StartRestMode(null, true);
-                return;
-            }
-
-            if (IsMorningLockTime(now))
-            {
-                if (!_morningPasswordBypassActive && !_isShutdownMode && !_isTimingPaused && now > _morningLockBypassUntil)
+                if (IsNightlyShutdownTime(now) && !_isShutdownMode && now > _nightShutdownBypassUntil)
                 {
-                    if (!_isMorningLockMode)
+                    StartRestMode(null, true);
+                    return;
+                }
+
+                if (IsMorningLockTime(now))
+                {
+                    if (!_morningPasswordBypassActive && !_isShutdownMode && !_isTimingPaused && now > _morningLockBypassUntil)
                     {
-                        StartMorningLock(now);
-                        return;
+                        if (!_isMorningLockMode)
+                        {
+                            StartMorningLock(now);
+                            return;
+                        }
                     }
                 }
-            }
-            else
-            {
-                _morningPasswordBypassActive = false;
-                if (_isMorningLockMode && !_isResting)
+                else
                 {
-                    _isMorningLockMode = false;
+                    _morningPasswordBypassActive = false;
+                    if (_isMorningLockMode && !_isResting)
+                    {
+                        _isMorningLockMode = false;
+                    }
+                }
+
+                EvaluateTimeWindowRules(now);
+
+                var schedule = _configManager.GetScheduleForToday();
+                if (!schedule.Enabled &&
+                    !_isResting && !_isShutdownMode && !_isTimingPaused &&
+                    now > _dayDisabledBypassUntil)
+                {
+                    StartRestMode(null, false, true, isDayDisabledLock: true);
+                    return;
                 }
             }
 
-            EvaluateTimeWindowRules(now);
+            // 完整性校验：开机至今 vs (开屏+锁屏)，差值超 10 分钟视为时间记录异常 → 密码锁
+            // 睡眠/休眠已由 _sleepGraceSeconds 豁免；进程被强杀/时钟被改都会在这里暴露
+            // [临时] 暂时去掉“时间比对不符合”的提示：完整性校验锁已禁用。
+            // 需要恢复时，取消下面代码块的注释即可。
+            //if (!IsRemoteUnlockActive(now) &&
+            //    _activeLockWindow == null &&
+            //    !_isResting && !_isShutdownMode && !_isTimingPaused &&
+            //    IntegrityMismatch(now))
+            //{
+            //    StartRestMode(null, false, true, isIntegrityLock: true);
+            //    return;
+            //}
 
-            var schedule = _configManager.GetScheduleForToday();
-            if (!schedule.Enabled && !_isResting && !_isShutdownMode && !_isTimingPaused)
+            // 周期性落盘（每5秒），避免强杀进程/断电丢失累计与锁定状态
+            if (_lastStateSave == DateTime.MinValue || (now - _lastStateSave).TotalSeconds >= 5)
             {
-                StartRestMode(null, false, true);
-                return;
+                _lastStateSave = now;
+                SaveState();
             }
 
             var remaining = _targetTime - now;
@@ -304,12 +442,18 @@ namespace ControlTimeService
         /// <summary>
         /// 开启强制休息模式（根据当天配置）
         /// </summary>
-        private void StartRestMode(DateTime? customEndTime = null, bool isShutdownMode = false, bool isPasswordRequiredOnly = false)
+        private void StartRestMode(
+            DateTime? customEndTime = null,
+            bool isShutdownMode = false,
+            bool isPasswordRequiredOnly = false,
+            bool isDayDisabledLock = false,
+            bool isIntegrityLock = false)
         {
             _isResting = true;
             _isShutdownMode = isShutdownMode;
             _isPasswordRequiredOnly = isPasswordRequiredOnly;
             _isMorningLockMode = false;
+            _integrityLockActive = isIntegrityLock;
             _eveningPasswordBypassActive = false;
 
             if (isShutdownMode)
@@ -333,7 +477,7 @@ namespace ControlTimeService
 
             SaveState();
 
-            OpenLockWindow(_isShutdownMode, isPasswordRequiredOnly, false);
+            OpenLockWindow(_isShutdownMode, isPasswordRequiredOnly, false, isDayDisabledLock: isDayDisabledLock, isIntegrityLock: isIntegrityLock);
             TryApplyPendingUpdate();
         }
 
@@ -382,7 +526,8 @@ namespace ControlTimeService
         /// </summary>
         private void StartAppViolationLock()
         {
-            if (_isResting || _isShutdownMode || _isTimingPaused || _activeLockWindow != null)
+            if (IsRemoteUnlockActive(DateTime.Now) ||
+                _isResting || _isShutdownMode || _isTimingPaused || _activeLockWindow != null)
                 return;
 
             var remaining = (_targetTime - DateTime.Now).TotalSeconds;
@@ -422,7 +567,9 @@ namespace ControlTimeService
             bool isPauseMode,
             bool requirePasswordForResume = false,
             bool isAppViolationPause = false,
-            bool isMorningLockMode = false)
+            bool isMorningLockMode = false,
+            bool isDayDisabledLock = false,
+            bool isIntegrityLock = false)
         {
             this.Hide();
 
@@ -444,7 +591,9 @@ namespace ControlTimeService
                 requirePasswordForResume,
                 isAppViolationPause,
                 ProcessRemoteCommandQueue,
-                isMorningLockMode);
+                isMorningLockMode,
+                isDayDisabledLock,
+                isIntegrityLock);
 
             _activeLockWindow = lockWin;
             bool? result = null;
@@ -482,12 +631,21 @@ namespace ControlTimeService
 
                     if (lockWin.WasPasswordOnlyUnlock)
                     {
+                        // 完整性锁通过密码解锁：重新锚定，继续正常计时
+                        if (_integrityLockActive)
+                        {
+                            _integrityLockActive = false;
+                            ReanchorIntegrity();
+                        }
+
                         _eveningPasswordBypassActive = true;
                         _lunchPasswordBypassActive = true;
                         // 防止夜间关机时间和早晨锁定立刻重新锁定
                         var bypassDuration = TimeSpan.FromMinutes(lockWin.TemporaryUsageMinutes ?? 30);
                         _nightShutdownBypassUntil = DateTime.Now.Add(bypassDuration);
                         _morningLockBypassUntil = DateTime.Now.Add(bypassDuration);
+                        // 当天未启用时紧急解锁，避免下一秒又因 Enabled=false 立刻重锁
+                        _dayDisabledBypassUntil = DateTime.Now.Add(bypassDuration);
                     }
                     else if (lockWin.WasMorningLockUnlock)
                     {
@@ -512,7 +670,7 @@ namespace ControlTimeService
                 this.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     System.Threading.Thread.Sleep(500);
-                    OpenLockWindow(isShutdownMode, isPasswordRequiredOnly, isPauseMode, requirePasswordForResume, isAppViolationPause, isMorningLockMode);
+                    OpenLockWindow(isShutdownMode, isPasswordRequiredOnly, isPauseMode, requirePasswordForResume, isAppViolationPause, isMorningLockMode, isDayDisabledLock);
                 }));
             }
 
@@ -534,6 +692,9 @@ namespace ControlTimeService
         public void RemoteLock(int minutes)
         {
             if (minutes <= 0) minutes = 30;
+
+            // 服务端命令无条件生效：锁定立即取消未到期的远程解锁授权（最后下发的命令优先）
+            CancelRemoteUnlockOverride();
 
             if (_activeLockWindow != null)
             {
@@ -557,6 +718,10 @@ namespace ControlTimeService
         {
             if (minutes <= 0) minutes = 30;
 
+            var unlockUntil = DateTime.Now.AddMinutes(minutes);
+            SetRemoteUnlockOverride(unlockUntil);
+            _isMorningLockMode = false;
+
             if (_activeLockWindow != null)
             {
                 _suppressLockReopen = true;
@@ -570,7 +735,6 @@ namespace ControlTimeService
             _isResting = false;
             _isShutdownMode = false;
             _isPasswordRequiredOnly = false;
-            _eveningPasswordBypassActive = false;
             StartUsageMode(minutes);
             this.Show();
         }
@@ -579,10 +743,10 @@ namespace ControlTimeService
         {
             try
             {
-                // 格式：IsResting|TargetTime|IsShutdownMode|StatsDate|LunchSec|LunchBreaks|EveningSec|IsPasswordRequiredOnly|IsTimingPaused|PausedRemainingSec|IsAppViolationPause|TotalDailyUsageSec|EveningBypass|LunchBypass|MorningBypass|NightShutdownBypassUntil|MorningLockBypassUntil
+                // 格式：IsResting|TargetTime|IsShutdownMode|StatsDate|LunchSec|LunchBreaks|EveningSec|IsPasswordRequiredOnly|IsTimingPaused|PausedRemainingSec|IsAppViolationPause|TotalDailyUsageSec|EveningBypass|LunchBypass|MorningBypass|NightShutdownBypassUntil|MorningLockBypassUntil|LockedSecToday|IntegrityAnchor|CountedSecAtAnchor|SleepGraceSec|IntegrityLockActive|LastSaveTime
                 File.WriteAllText(
                     _configPath,
-                    $"{_isResting}|{_targetTime:o}|{_isShutdownMode}|{_usageStatsDate:yyyy-MM-dd}|{_lunchAccumulatedSeconds}|{_lunchBreaksTaken}|{_eveningAccumulatedSeconds}|{_isPasswordRequiredOnly}|{_isTimingPaused}|{_pausedRemainingSeconds}|{_isAppViolationPause}|{_totalDailyUsageSeconds}|{_eveningPasswordBypassActive}|{_lunchPasswordBypassActive}|{_morningPasswordBypassActive}|{_nightShutdownBypassUntil:o}|{_morningLockBypassUntil:o}");
+                    $"{_isResting}|{_targetTime:o}|{_isShutdownMode}|{_usageStatsDate:yyyy-MM-dd}|{_lunchAccumulatedSeconds}|{_lunchBreaksTaken}|{_eveningAccumulatedSeconds}|{_isPasswordRequiredOnly}|{_isTimingPaused}|{_pausedRemainingSeconds}|{_isAppViolationPause}|{_totalDailyUsageSeconds}|{_eveningPasswordBypassActive}|{_lunchPasswordBypassActive}|{_morningPasswordBypassActive}|{_nightShutdownBypassUntil:o}|{_morningLockBypassUntil:o}|{_lockedSecondsToday}|{_integrityAnchor:o}|{_countedSecondsAtAnchor}|{_sleepGraceSeconds}|{_integrityLockActive}|{DateTime.Now:o}");
             }
             catch { }
         }
@@ -594,6 +758,21 @@ namespace ControlTimeService
 
             // 先恢复密码绕过状态，使夜间/早晨锁判断能正确尊重已解锁的绕过
             LoadBypassState();
+
+            bool savedIntegrityLock = false;
+            if (File.Exists(_configPath))
+            {
+                try
+                {
+                    var data = File.ReadAllText(_configPath).Split('|');
+                    if (data.Length >= 18) double.TryParse(data[17], out _lockedSecondsToday);
+                    if (data.Length >= 19 && DateTime.TryParse(data[18], out var anchor)) _integrityAnchor = anchor;
+                    if (data.Length >= 20) double.TryParse(data[19], out _countedSecondsAtAnchor);
+                    if (data.Length >= 21) double.TryParse(data[20], out _sleepGraceSeconds);
+                    if (data.Length >= 22) bool.TryParse(data[21], out savedIntegrityLock);
+                }
+                catch { }
+            }
 
             // 开机启动时在夜间关机时段自动进入锁屏
             if (IsNightlyShutdownTime(now) && now > _nightShutdownBypassUntil)
@@ -609,6 +788,16 @@ namespace ControlTimeService
                 return;
             }
 
+            // 升级/重启后完整性锁必须立即恢复，否则等于绕过时间记录异常
+            // [临时] 暂时去掉“时间比对不符合”的提示：重启/升级后不再恢复完整性锁。
+            // 需要恢复时，取消下面代码块的注释即可。
+            //if (savedIntegrityLock)
+            //{
+            //    _integrityLockActive = true;
+            //    StartRestMode(null, false, true, isIntegrityLock: true);
+            //    return;
+            //}
+
             // 注意：午间时段不直接锁屏，由定时器后续评估累计使用时间
 
             if (File.Exists(_configPath))
@@ -620,6 +809,14 @@ namespace ControlTimeService
                     DateTime savedTargetTime = DateTime.Parse(data[1]);
                     bool savedIsShutdown = false;
                     bool savedIsPasswordRequiredOnly = false;
+                    // 最后落盘时刻：用于计算程序不运行（卡死/关机/重启）期间的流逝时间
+                    DateTime lastSaveTime = DateTime.MinValue;
+                    if (data.Length >= 23 && DateTime.TryParse(data[22], out var parsedLastSave))
+                        lastSaveTime = parsedLastSave;
+                    if (lastSaveTime == DateTime.MinValue)
+                    {
+                        try { lastSaveTime = File.GetLastWriteTime(_configPath); } catch { }
+                    }
                     if (data.Length >= 3) bool.TryParse(data[2], out savedIsShutdown);
                     if (data.Length >= 4 && DateTime.TryParse(data[3], out var statsDate)) _usageStatsDate = statsDate.Date;
                     if (data.Length >= 5) double.TryParse(data[4], out _lunchAccumulatedSeconds);
@@ -687,7 +884,43 @@ namespace ControlTimeService
                         }
                         else
                         {
-                            StartUsageMode();
+                            // 修复：卡顿/关机重启后，使用阶段目标时间在“程序不运行期间”已过时，
+                            // 不能直接重新计时（否则重启即可绕过锁定，丢失锁定时间）。
+                            // 程序不运行期间的流逝时间继续计入使用阶段，耗尽后再计入休息阶段：
+                            // - 整个“剩余使用 + 休息时段”都在不运行期间耗完 → 视为休息完成，发放新使用时段；
+                            // - 否则接续剩余休息时间（锁屏），锁定时间不丢失。
+                            var gapSeconds = (now - lastSaveTime).TotalSeconds;
+                            var remainingAtSave = Math.Max(0, (savedTargetTime - lastSaveTime).TotalSeconds);
+
+                            int usage, rest;
+                            GetDurationsForNow(out usage, out rest);
+
+                            if (lastSaveTime == DateTime.MinValue || gapSeconds < 0)
+                            {
+                                // 保存时间无效或时钟异常：保守接续为完整休息，避免直接发放使用时间
+                                Debug.WriteLine($"重启接续：状态保存时间无效，进入完整休息");
+                                StartRestMode();
+                            }
+                            else if (lastSaveTime.Date != now.Date)
+                            {
+                                // 跨天：夜间/早晨锁已在前面处理，新的一天重新开始计时
+                                Debug.WriteLine($"重启接续：已跨天，开始新一天的计时");
+                                StartUsageMode();
+                            }
+                            else if (gapSeconds - remainingAtSave >= rest * 60)
+                            {
+                                // 不运行期间剩余使用与整个休息时段均已流逝 → 休息视为完成
+                                Debug.WriteLine($"重启接续：关机期间已完成休息，开始新使用时段");
+                                StartUsageMode();
+                            }
+                            else
+                            {
+                                // 使用阶段已在不运行期间耗尽，锁定剩余休息时间
+                                var overtime = Math.Max(0, gapSeconds - remainingAtSave);
+                                var restRemaining = Math.Max(60, rest * 60 - overtime);
+                                Debug.WriteLine($"重启接续：使用阶段已在关机期间结束，锁定剩余休息 {restRemaining / 60.0:F1} 分钟");
+                                StartRestMode(now.AddSeconds(restRemaining));
+                            }
                         }
                     }
 
@@ -817,12 +1050,20 @@ namespace ControlTimeService
 
             _usageStatsDate = now.Date;
             _totalDailyUsageSeconds = 0;
+            _lockedSecondsToday = 0;
             _lunchAccumulatedSeconds = 0;
             _lunchBreaksTaken = 0;
             _eveningAccumulatedSeconds = 0;
             _eveningPasswordBypassActive = false;
             _lunchPasswordBypassActive = false;
             _morningPasswordBypassActive = false;
+
+            // 完整性锁不因跨天自动解锁（由密码解锁后重新锚定）
+            if (_integrityLockActive)
+            {
+                SaveState();
+                return;
+            }
 
             if (_isPasswordRequiredOnly && !IsNightlyShutdownTime(now))
             {
@@ -839,28 +1080,129 @@ namespace ControlTimeService
             var delta = (now - _lastLogicTick).TotalSeconds;
             _lastLogicTick = now;
 
-            if (delta <= 0 || delta > 10)
+            if (delta <= 0)
             {
                 return;
             }
 
-            if (_isResting || _isShutdownMode || _isTimingPaused)
+            // 睡眠/休眠/长时间停顿（>90秒）：不累计开屏也不累计锁屏，记入豁免，
+            // 避免把睡眠时间当成“时间记录缺失”触发完整性锁屏。
+            if (delta > 90)
             {
+                _sleepGraceSeconds += delta;
                 return;
             }
 
-            // 累加当日总使用时长
-            _totalDailyUsageSeconds += delta;
+            // 锁屏状态：休息 / 夜间关机 / 暂停 / 早晨锁定（早晨锁和违规暂停已置 _isResting/_isTimingPaused）
+            bool locked = _isResting || _isShutdownMode || _isTimingPaused;
 
-            if (IsLunchRestrictedWindow(now))
+            if (locked)
             {
-                _lunchAccumulatedSeconds += delta;
+                _lockedSecondsToday += delta;
+            }
+            else
+            {
+                // 当日总使用时长（开屏时间）
+                _totalDailyUsageSeconds += delta;
+
+                if (IsLunchRestrictedWindow(now))
+                {
+                    _lunchAccumulatedSeconds += delta;
+                }
+
+                if (IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now))
+                {
+                    _eveningAccumulatedSeconds += delta;
+                }
+            }
+        }
+
+        private void InitializeIntegrityAnchor(DateTime now)
+        {
+            // 完整性锚点：从每天开机时刻（或零点、完整性锁解锁后）重新起算
+            if (_integrityAnchor != DateTime.MinValue && _integrityAnchor.Date == now.Date)
+            {
+                // 锚点早于系统本次启动时刻，说明锚点属于上一次开机会话：
+                // 期间的缺口是正常关机断电（如当天长时间关机后再开机），不属于绕过计时，
+                // 重新锚定以免误报“时间记录异常”。同一次开机会话内强杀进程仍会被检出。
+                var sessionStart = GetSystemSessionStart();
+                if (sessionStart.HasValue && _integrityAnchor < sessionStart.Value)
+                    ReanchorIntegrity();
+
+                return;
             }
 
-            if (IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now))
+            ReanchorIntegrity();
+        }
+
+        /// <summary>
+        /// 系统本次会话（最近一次开机或快速启动恢复）的开始时刻，取两者较晚者：
+        /// 1) TickCount64 推算的内核启动时刻（普通重启会刷新）；
+        /// 2) 系统事件日志 6005（事件日志服务启动）的时间（快速启动的关机-开机循环后也会刷新）。
+        /// </summary>
+        private DateTime? GetSystemSessionStart()
+        {
+            if (_systemSessionStartResolved)
+                return _systemSessionStart;
+
+            _systemSessionStartResolved = true;
+
+            try
             {
-                _eveningAccumulatedSeconds += delta;
+                _systemSessionStart = DateTime.Now - TimeSpan.FromMilliseconds(GetTickCount64());
             }
+            catch { }
+
+            try
+            {
+                var query = new EventLogQuery("System", PathType.LogName, "*[System[EventID=6005]]")
+                {
+                    ReverseDirection = true
+                };
+                using var reader = new EventLogReader(query);
+                var lastLogStart = reader.ReadEvent()?.TimeCreated;
+                if (lastLogStart.HasValue &&
+                    (_systemSessionStart == null || lastLogStart.Value > _systemSessionStart.Value))
+                {
+                    _systemSessionStart = lastLogStart;
+                }
+            }
+            catch
+            {
+                // 事件日志不可读时仅用 TickCount 推算值
+            }
+
+            return _systemSessionStart;
+        }
+
+        /// <summary>
+        /// 重新锚定：记录当前时刻与已累计(开屏+锁屏)秒数。
+        /// 锚定后“开屏+锁屏”与本机时钟同步推进，若有人改系统时间或
+        /// 关机时段被挪用（强杀、休眠绕过、重装等），累计会少于时钟流逝而触发完整性锁。
+        /// </summary>
+        private void ReanchorIntegrity()
+        {
+            _integrityAnchor = DateTime.Now;
+            _countedSecondsAtAnchor = _totalDailyUsageSeconds + _lockedSecondsToday;
+            _sleepGraceSeconds = 0;
+        }
+
+        /// <summary>
+        /// 完整性校验：自锚点起的时钟流逝 与 (开屏+锁屏+睡眠豁免) 是否吻合。
+        /// 差值超过 10 分钟即视为时间记录异常（被绕过/时钟被改）。
+        /// </summary>
+        private bool IntegrityMismatch(DateTime now)
+        {
+            if (_integrityAnchor == DateTime.MinValue || _integrityAnchor.Date != now.Date)
+                return false;
+
+            var elapsed = (now - _integrityAnchor).TotalSeconds;
+            if (elapsed <= IntegrityMismatchThresholdSeconds)
+                return false;
+
+            var counted = _totalDailyUsageSeconds + _lockedSecondsToday - _countedSecondsAtAnchor + _sleepGraceSeconds;
+            var gap = elapsed - counted;
+            return gap > IntegrityMismatchThresholdSeconds;
         }
 
         private void ClearEveningLockDuringLunch(DateTime now)
@@ -979,7 +1321,11 @@ namespace ControlTimeService
 
         protected override void OnClosed(EventArgs e)
         {
+            // 进程退出前再保存一次，避免升级/异常退出丢失锁定状态与剩余时间
+            SaveState();
+            CrashLogger.Log("进程 OnClosed 退出");
             _statusTimer?.Stop();
+            _watchdogTimer?.Stop();
             _autoUpdater?.Stop();
             _notifyIcon.Dispose();
             base.OnClosed(e);
@@ -994,6 +1340,9 @@ namespace ControlTimeService
         {
             if (_isTimingPaused || _isShutdownMode)
                 return;
+
+            // 服务端命令无条件生效：暂停同样取消未到期的远程解锁授权
+            CancelRemoteUnlockOverride();
 
             if (_activeLockWindow != null)
             {
@@ -1017,27 +1366,60 @@ namespace ControlTimeService
             ApplyConfigChanges();
             ApplyUsageLimitFromConfig();
 
+            if (IsRemoteUnlockActive(DateTime.Now))
+            {
+                ShowNotification("设置已更新", "远程解锁期间暂不改变当前锁屏状态");
+                return;
+            }
+
             var schedule = _configManager.GetScheduleForToday();
             if (!schedule.Enabled)
             {
                 if (!_isResting && !_isShutdownMode)
-                    StartRestMode(null, false, true);
+                    StartRestMode(null, false, true, isDayDisabledLock: true);
             }
-            else if (_isPasswordRequiredOnly && !IsEveningRestrictedWindow(DateTime.Now) && !IsLunchRestrictedWindow(DateTime.Now))
+            else if (TryExitDayDisabledPasswordLock())
             {
-                // 管理端重新启用当天控制时，立即退出“未启用导致的密码锁”状态。
-                _isPasswordRequiredOnly = false;
-                _isResting = false;
-                StartUsageMode();
+                // 管理端重新启用当天控制：关闭锁屏并进入使用
             }
 
             ShowNotification("设置已更新", "管理端下发的配置已生效");
         }
 
+        /// <summary>
+        /// 当天从「未启用」密码锁恢复为可用时：必须关掉当前锁屏窗口，否则配置已生效但屏幕仍锁着。
+        /// </summary>
+        private bool TryExitDayDisabledPasswordLock()
+        {
+            var now = DateTime.Now;
+            if (!_isPasswordRequiredOnly)
+                return false;
+            if (IsEveningRestrictedWindow(now) || IsLunchRestrictedWindow(now))
+                return false;
+
+            var usageMinutes = Math.Max(1, _configManager.GetScheduleForToday().UsageMinutes);
+
+            if (_activeLockWindow != null)
+            {
+                _suppressLockReopen = true;
+                _isPasswordRequiredOnly = false;
+                _isResting = false;
+                _isShutdownMode = false;
+                _activeLockWindow.ForceRemoteUnlock(usageMinutes);
+                return true;
+            }
+
+            _isPasswordRequiredOnly = false;
+            _isResting = false;
+            StartUsageMode(usageMinutes);
+            this.Show();
+            return true;
+        }
+
         private void ApplyUsageLimitFromConfig()
         {
             var schedule = _configManager.GetScheduleForToday();
-            if (!schedule.Enabled)
+            if (!schedule.Enabled || IsRemoteUnlockActive(DateTime.Now))
                 return;
 
             if (_isResting || _isShutdownMode || _isTimingPaused || _isMorningLockMode)
@@ -1061,23 +1443,28 @@ namespace ControlTimeService
             _appMonitor.SetPolicy(_appPolicyManager.GetPolicy());
 
             var now = DateTime.Now;
+            if (IsRemoteUnlockActive(now))
+            {
+                ReportStatusToControl();
+                return;
+            }
+
             var schedule = _configManager.GetScheduleForToday();
 
             // 立即应用“启用此天控制”开关，避免保存后仍按旧状态运行。
             if (!schedule.Enabled)
             {
                 if (!_isResting && !_isShutdownMode && !_isTimingPaused)
-                    StartRestMode(null, false, true);
+                    StartRestMode(null, false, true, isDayDisabledLock: true);
 
                 ReportStatusToControl();
                 return;
             }
 
-            if (_isPasswordRequiredOnly && !IsEveningRestrictedWindow(now) && !IsLunchRestrictedWindow(now))
+            if (TryExitDayDisabledPasswordLock())
             {
-                _isPasswordRequiredOnly = false;
-                _isResting = false;
-                StartUsageMode();
+                ReportStatusToControl();
+                return;
             }
 
             ClearEveningLockDuringLunch(now);
@@ -1123,6 +1510,8 @@ namespace ControlTimeService
             _pendingUpdateUrl = null;
             _pendingUpdateVersion = null;
 
+            // 升级重启前落盘，保留当前锁定/解锁与剩余时间
+            SaveState();
             _ = _autoUpdater.ApplyUpdateAsync(packageUrl, version, force: true);
         }
 
@@ -1231,19 +1620,18 @@ namespace ControlTimeService
         {
             packageUrl = AutoUpdater.NormalizeDownloadUrl(packageUrl);
 
-            if (IsClientLockedForUpdate())
-            {
-                _ = _autoUpdater.ApplyUpdateAsync(packageUrl, version, force: true);
-                return;
-            }
+            // 升级重启前落盘，确保锁定/解锁状态与剩余时间不因重启丢失
+            SaveState();
 
-            _pendingUpdateUrl = packageUrl;
-            _pendingUpdateVersion = version;
+            // 立即安装，避免「使用中/远程解锁」时升级一直排队、问题修不好
+            _pendingUpdateUrl = null;
+            _pendingUpdateVersion = null;
             _notifyIcon?.ShowBalloonTip(
                 3000,
                 "ControlTimeService 升级",
-                "已收到升级包，将在下次锁屏时自动安装",
+                $"正在安装版本 {version ?? ""}...",
                 ToolTipIcon.Info);
+            _ = _autoUpdater.ApplyUpdateAsync(packageUrl, version, force: true);
         }
 
         private void ConfigButton_Click(object sender, RoutedEventArgs e)
@@ -1393,6 +1781,36 @@ namespace ControlTimeService
             return ControlConfig.Load().ServerUrl;
         }
 
+        private DateTime _lastViolationPushTime = DateTime.MinValue;
+        private string _lastViolationPushText = string.Empty;
+
+        /// <summary>
+        /// 违规/预警推送到控制端消息记录（fire-and-forget，失败仅写调试日志）。
+        /// 相同内容 30 秒内去重，避免杀进程失败重试时刷屏。
+        /// </summary>
+        private void PushViolationToServer(string text)
+        {
+            try
+            {
+                if (_controlClient == null || string.IsNullOrWhiteSpace(text))
+                    return;
+
+                var now = DateTime.Now;
+                if (string.Equals(text, _lastViolationPushText, StringComparison.Ordinal) &&
+                    (now - _lastViolationPushTime).TotalSeconds < 30)
+                    return;
+
+                _lastViolationPushText = text;
+                _lastViolationPushTime = now;
+
+                _ = _controlClient.SendMessageToServerAsync(text);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"违规推送失败: {ex.Message}");
+            }
+        }
+
         private void ReportStatusToControl()
         {
             if (_controlClient == null) return;
@@ -1404,6 +1822,9 @@ namespace ControlTimeService
                 isTimingPaused = _isTimingPaused,
                 remainingSeconds = GetReportableRemainingSeconds(),
                 totalUsageSecondsToday = _totalDailyUsageSeconds,
+                openSecondsToday = _totalDailyUsageSeconds,
+                lockedSecondsToday = _lockedSecondsToday,
+                lastBlockedApp = _appMonitor?.LastBlockedReason,
                 config = _configManager.GetAllSchedules(),
                 appPolicy = _appPolicyManager.GetPolicy()
             };

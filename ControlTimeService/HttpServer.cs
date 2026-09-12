@@ -30,15 +30,36 @@ namespace ControlTimeService
         public DateTime LastHeartbeat { get; set; }
         public string Status { get; set; } = "Online";
         public string AppVersion { get; set; }
+
+        [JsonPropertyName("lastBlockedApp")]
+        public string LastBlockedApp { get; set; }
+
         public Dictionary<string, DaySchedule> Config { get; set; }
         public AppPolicy AppPolicy { get; set; }
         [JsonPropertyName("remainingSeconds")]
         public double RemainingSeconds { get; set; }
         [JsonPropertyName("totalUsageSecondsToday")]
         public double TotalUsageSecondsToday { get; set; }
+        [JsonPropertyName("openSecondsToday")]
+        public double OpenSecondsToday { get; set; }
+        [JsonPropertyName("lockedSecondsToday")]
+        public double LockedSecondsToday { get; set; }
 
         [JsonIgnore]
         public double TotalUsageHoursToday => Math.Round(TotalUsageSecondsToday / 3600.0, 1);
+
+        [JsonIgnore]
+        public string OpenTimeDisplay => FormatClockTime(OpenSecondsToday);
+
+        [JsonIgnore]
+        public string LockedTimeDisplay => FormatClockTime(LockedSecondsToday);
+
+        public static string FormatClockTime(double seconds)
+        {
+            if (seconds < 0) seconds = 0;
+            var ts = TimeSpan.FromSeconds(seconds);
+            return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}";
+        }
 
         [JsonIgnore]
         public string RemainingTimeDisplay => FormatRemainingTime(RemainingSeconds);
@@ -286,6 +307,11 @@ namespace ControlTimeService
                 {
                     HandleGetClients(response);
                 }
+                else if (path.StartsWith("/api/clients/") && request.HttpMethod == "DELETE"
+                         && path.Split('/').Length == 4)
+                {
+                    HandleDeleteClient(request, response);
+                }
                 else if (path.StartsWith("/api/clients/") && request.HttpMethod == "GET" 
                          && path.Split('/').Length == 4)
                 {
@@ -382,6 +408,18 @@ namespace ControlTimeService
                     if (record.ClientMessages != null && record.ClientMessages.Count > 0)
                         client.ClientMessages = record.ClientMessages;
 
+                    // 恢复离线期间排队的远程命令（如升级）
+                    if (record.PendingCommands != null && record.PendingCommands.Count > 0)
+                    {
+                        client.PendingCommands ??= new List<RemoteCommand>();
+                        foreach (var pending in record.PendingCommands)
+                        {
+                            if (pending == null || string.IsNullOrWhiteSpace(pending.Command))
+                                continue;
+                            client.PendingCommands.Add(pending);
+                        }
+                    }
+
                     // 注册表有配置时以注册表为准（管理端下发的配置），并推送给客户端
                     if (record.Config != null && record.Config.Count > 0)
                     {
@@ -389,11 +427,24 @@ namespace ControlTimeService
                         if (clientData.Config == null || !ConfigsEqual(clientData.Config, record.Config))
                             QueueConfigCommand(client, record.Config);
                     }
-                    else if (clientData.Config != null && clientData.Config.Count > 0)
+                    else
                     {
-                        client.Config = clientData.Config;
-                        _registry.SaveConfig(client.Id, clientData.Config);
-                        SyncAppPolicyFromConfig(client.Id, clientData.Config);
+                        // 新 ID（如 MAC 读取失败产生的 *_unknown）但存在同名旧记录时，
+                        // 复用旧记录的管理端配置，避免把客户端本地的杂散配置收养为权威配置
+                        var inheritedConfig = FindConfigByComputerName(record.ComputerName, client.Id);
+                        if (inheritedConfig != null)
+                        {
+                            client.Config = inheritedConfig;
+                            _registry.SaveConfig(client.Id, inheritedConfig);
+                            SyncAppPolicyFromConfig(client.Id, inheritedConfig);
+                            QueueConfigCommand(client, inheritedConfig);
+                        }
+                        else if (clientData.Config != null && clientData.Config.Count > 0)
+                        {
+                            client.Config = clientData.Config;
+                            _registry.SaveConfig(client.Id, clientData.Config);
+                            SyncAppPolicyFromConfig(client.Id, clientData.Config);
+                        }
                     }
 
                     // 仅在没有完整日程配置时推送旧版独立 AppPolicy，避免覆盖配置里已保存的应用权限
@@ -455,12 +506,13 @@ namespace ControlTimeService
             {
                 var client = _clients[clientId];
                 client.PendingCommands ??= new List<RemoteCommand>();
-                var commands = client.PendingCommands;
+                var commands = new List<RemoteCommand>(client.PendingCommands);
                 var json = JsonSerializer.Serialize(commands, JsonOptions);
 
-                // 返回后清空命令列表
+                // 返回后清空命令列表（内存 + 注册表）
                 client.PendingCommands.Clear();
-                
+                _registry.SavePendingCommands(clientId, client.PendingCommands);
+
                 SendJsonResponse(response, 200, json);
             }
             else
@@ -497,6 +549,22 @@ namespace ControlTimeService
 
                     if (statusData.TryGetValue("totalUsageSecondsToday", out var usageVal))
                         client.TotalUsageSecondsToday = ReadJsonDouble(usageVal);
+
+                    // 开屏累计 = totalUsageSecondsToday（客户端同时上报）
+                    if (statusData.TryGetValue("openSecondsToday", out var openVal))
+                        client.OpenSecondsToday = ReadJsonDouble(openVal);
+                    else
+                        client.OpenSecondsToday = client.TotalUsageSecondsToday;
+
+                    if (statusData.TryGetValue("lockedSecondsToday", out var lockedVal))
+                        client.LockedSecondsToday = ReadJsonDouble(lockedVal);
+
+                    if (statusData.TryGetValue("lastBlockedApp", out var blockedVal))
+                    {
+                        client.LastBlockedApp = blockedVal is JsonElement blockedEl
+                            ? blockedEl.GetString()
+                            : blockedVal?.ToString();
+                    }
 
                     // 配置与策略以注册表（管理端下发）为准，不在状态上报时覆盖
                     client.Status = client.IsTimingPaused ? "Paused" : (client.IsResting ? "Locked" : "Using");
@@ -571,6 +639,32 @@ namespace ControlTimeService
             }
         }
 
+        /// <summary>
+        /// 从服务端客户端列表删除指定客户端（在线会话与持久化注册记录一并移除）。
+        /// </summary>
+        private void HandleDeleteClient(HttpListenerRequest request, HttpListenerResponse response)
+        {
+            var pathParts = request.Url.AbsolutePath.Split('/');
+            var clientId = Uri.UnescapeDataString(pathParts[pathParts.Length - 1]);
+
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                SendResponse(response, 400, "Client id is required");
+                return;
+            }
+
+            var existedOnline = _clients.Remove(clientId);
+            var existedRecord = _registry.Remove(clientId);
+
+            if (!existedOnline && !existedRecord)
+            {
+                SendResponse(response, 404, "Client not found");
+                return;
+            }
+
+            SendResponse(response, 200, "Client removed");
+        }
+
         private ClientInfo CloneClientForList(ClientInfo client)
         {
             var record = _registry.Get(client.Id);
@@ -601,13 +695,19 @@ namespace ControlTimeService
                 LastHeartbeat = client.LastHeartbeat,
                 Status = client.Status,
                 AppVersion = client.AppVersion,
+                LastBlockedApp = client.LastBlockedApp,
                 Config = config,
                 AppPolicy = appPolicy,
                 RemainingSeconds = client.RemainingSeconds,
                 TotalUsageSecondsToday = client.TotalUsageSecondsToday,
+                OpenSecondsToday = client.OpenSecondsToday,
+                LockedSecondsToday = client.LockedSecondsToday,
                 IsResting = client.IsResting,
                 IsShutdownMode = client.IsShutdownMode,
                 IsTimingPaused = client.IsTimingPaused,
+                PendingCommands = client.PendingCommands == null
+                    ? new List<RemoteCommand>()
+                    : new List<RemoteCommand>(client.PendingCommands),
                 ClientMessages = SortMessagesNewestFirst(messages)
             };
         }
@@ -773,6 +873,7 @@ namespace ControlTimeService
                         kvp.Value.AllowMaoxiang = policy.AllowMaoxiang;
                         kvp.Value.AllowDouyin = policy.AllowDouyin;
                         kvp.Value.AllowKuaishou = policy.AllowKuaishou;
+                        kvp.Value.AllowXiaohongshu = policy.AllowXiaohongshu;
                         kvp.Value.AllowFanqieNovel = policy.AllowFanqieNovel;
                         kvp.Value.AllowTencentAppStore = policy.AllowTencentAppStore;
                         kvp.Value.AllowOtherGames = policy.AllowOtherGames;
@@ -804,6 +905,7 @@ namespace ControlTimeService
                         kvp.Value.AllowMaoxiang = policy.AllowMaoxiang;
                         kvp.Value.AllowDouyin = policy.AllowDouyin;
                         kvp.Value.AllowKuaishou = policy.AllowKuaishou;
+                        kvp.Value.AllowXiaohongshu = policy.AllowXiaohongshu;
                         kvp.Value.AllowFanqieNovel = policy.AllowFanqieNovel;
                         kvp.Value.AllowTencentAppStore = policy.AllowTencentAppStore;
                         kvp.Value.AllowOtherGames = policy.AllowOtherGames;
@@ -816,6 +918,26 @@ namespace ControlTimeService
                 _registry.SaveAppPolicy(clientId, policy);
                 SendResponse(response, 200, "App policy saved; will apply when client connects");
             }
+        }
+
+        /// <summary>
+        /// 按计算机名查找其它客户端记录的管理端配置（同名客户端换了 ID 时继承配置）。
+        /// </summary>
+        private Dictionary<string, DaySchedule> FindConfigByComputerName(string computerName, string excludeClientId)
+        {
+            if (string.IsNullOrWhiteSpace(computerName))
+                return null;
+
+            foreach (var r in _registry.GetAllRecords())
+            {
+                if (string.Equals(r.Id, excludeClientId, StringComparison.Ordinal))
+                    continue;
+                if (!string.Equals(r.ComputerName, computerName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (r.Config != null && r.Config.Count > 0)
+                    return r.Config;
+            }
+            return null;
         }
 
         /// <summary>
@@ -962,9 +1084,20 @@ namespace ControlTimeService
                 return 0;
 
             var count = 0;
-            foreach (var client in _clients.Values)
+            var ids = new HashSet<string>(_clients.Keys, StringComparer.OrdinalIgnoreCase);
+            foreach (var id in ids)
             {
-                if (QueueUpdateCommand(client, packageUrl, version))
+                if (QueueUpdateCommand(id, packageUrl, version))
+                    count++;
+            }
+
+            foreach (var record in _registry.GetAllRecords())
+            {
+                if (record == null || string.IsNullOrWhiteSpace(record.Id))
+                    continue;
+                if (!ids.Add(record.Id))
+                    continue;
+                if (QueueUpdateCommand(record.Id, packageUrl, version))
                     count++;
             }
 
@@ -973,14 +1106,28 @@ namespace ControlTimeService
 
         public bool PushUpdateToClient(string clientId, string packageUrl, string version)
         {
-            if (string.IsNullOrWhiteSpace(packageUrl) || !_clients.TryGetValue(clientId, out var client))
+            if (string.IsNullOrWhiteSpace(packageUrl) || string.IsNullOrWhiteSpace(clientId))
                 return false;
 
-            return QueueUpdateCommand(client, packageUrl, version);
+            return QueueUpdateCommand(clientId, packageUrl, version);
         }
 
         private bool QueueUpdateCommand(ClientInfo client, string packageUrl, string version)
         {
+            if (client == null || string.IsNullOrWhiteSpace(client.Id))
+                return false;
+
+            return QueueUpdateCommand(client.Id, packageUrl, version);
+        }
+
+        private bool QueueUpdateCommand(string clientId, string packageUrl, string version)
+        {
+            if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(packageUrl))
+                return false;
+
+            if (!_clients.ContainsKey(clientId) && _registry.Get(clientId) == null)
+                return false;
+
             var parameters = new Dictionary<string, object>
             {
                 { "package_url", packageUrl }
@@ -989,12 +1136,30 @@ namespace ControlTimeService
             if (!string.IsNullOrWhiteSpace(version))
                 parameters["version"] = version;
 
-            EnqueueCommand(client, new RemoteCommand
+            var command = new RemoteCommand
             {
                 Command = "update",
                 Parameters = parameters
-            });
+            };
 
+            List<RemoteCommand> pending;
+            if (_clients.TryGetValue(clientId, out var client))
+            {
+                client.PendingCommands ??= new List<RemoteCommand>();
+                client.PendingCommands.RemoveAll(c =>
+                    string.Equals(c?.Command, "update", StringComparison.OrdinalIgnoreCase));
+                client.PendingCommands.Add(command);
+                pending = client.PendingCommands;
+            }
+            else
+            {
+                pending = _registry.GetPendingCommands(clientId) ?? new List<RemoteCommand>();
+                pending.RemoveAll(c =>
+                    string.Equals(c?.Command, "update", StringComparison.OrdinalIgnoreCase));
+                pending.Add(command);
+            }
+
+            _registry.SavePendingCommands(clientId, pending);
             return true;
         }
 
@@ -1133,32 +1298,33 @@ namespace ControlTimeService
         private void HandleUpdateClient(HttpListenerRequest request, HttpListenerResponse response)
         {
             var pathParts = request.Url.AbsolutePath.Split('/');
-            var clientId = pathParts[pathParts.Length - 2];
+            var clientId = Uri.UnescapeDataString(pathParts[pathParts.Length - 2]);
 
-            if (_clients.ContainsKey(clientId))
+            var body = ReadRequestBody(request);
+            var updateData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body, JsonOptions);
+
+            if (updateData == null ||
+                !updateData.TryGetValue("package_url", out var packageUrlElement) ||
+                string.IsNullOrWhiteSpace(packageUrlElement.GetString()))
             {
-                var body = ReadRequestBody(request);
-                var updateData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body, JsonOptions);
-
-                if (updateData == null ||
-                    !updateData.TryGetValue("package_url", out var packageUrlElement) ||
-                    string.IsNullOrWhiteSpace(packageUrlElement.GetString()))
-                {
-                    SendResponse(response, 400, "package_url is required");
-                    return;
-                }
-
-                QueueUpdateCommand(
-                    _clients[clientId],
-                    packageUrlElement.GetString()!,
-                    updateData.TryGetValue("version", out var versionElement) ? versionElement.GetString() : null);
-
-                SendResponse(response, 200, "Update command sent");
+                SendResponse(response, 400, "package_url is required");
+                return;
             }
-            else
+
+            var version = updateData.TryGetValue("version", out var versionElement)
+                ? versionElement.GetString()
+                : null;
+
+            if (!QueueUpdateCommand(clientId, packageUrlElement.GetString()!, version))
             {
                 SendResponse(response, 404, "Client not found");
+                return;
             }
+
+            var isOnline = _clients.ContainsKey(clientId);
+            SendResponse(response, 200, isOnline
+                ? "Update command sent"
+                : "Update queued; will apply when client connects");
         }
 
         private void HandleWebRequest(HttpListenerRequest request, HttpListenerResponse response)

@@ -389,6 +389,55 @@ namespace ControlCenter
             }
         }
 
+        private async void DeleteClient_Click(object sender, RoutedEventArgs e)
+        {
+            var client = ClientsDataGrid.SelectedItem as ClientInfo;
+            if (client == null)
+            {
+                MessageBox.Show("请选择一个客户端", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var result = MessageBox.Show(
+                $"确定要删除客户端 {client.Name} 吗？\n\n" +
+                "将从服务端客户端列表中移除该客户端，并删除其注册记录与配置。\n" +
+                "（客户端若仍在线，删除后如再次注册会重新出现在列表中）",
+                "确认删除",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+                return;
+
+            try
+            {
+                var response = await _httpClient.DeleteAsync(
+                    $"{_serverUrl}/api/clients/{client.Id}");
+
+                if (response.IsSuccessStatusCode)
+                {
+                    ShowStatusMessage($"已删除客户端 {client.Name}");
+                    RefreshClientList();
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    ShowStatusMessage($"客户端 {client.Name} 已被删除或不存在");
+                    RefreshClientList();
+                }
+                else
+                {
+                    MessageBox.Show($"删除失败，HTTP {(int)response.StatusCode}", "错误",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"删除客户端失败: {ex.Message}", "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private async void EditClientSettings_Click(object sender, RoutedEventArgs e)
         {
             var client = ClientsDataGrid.SelectedItem as ClientInfo;

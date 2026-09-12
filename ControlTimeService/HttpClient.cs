@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -96,15 +97,35 @@ namespace ControlTimeService
             try
             {
                 var nics = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+                // 优先物理网卡（以太网/Wi-Fi），跳过隧道、虚拟网卡等，避免读到空 MAC 导致 ID 变成 *_unknown
+                var physicalTypes = new[]
+                {
+                    System.Net.NetworkInformation.NetworkInterfaceType.Ethernet,
+                    System.Net.NetworkInformation.NetworkInterfaceType.GigabitEthernet,
+                    System.Net.NetworkInformation.NetworkInterfaceType.FastEthernetT,
+                    System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211
+                };
                 foreach (var nic in nics)
                 {
-                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
-                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
-                    {
-                        var mac = nic.GetPhysicalAddress().ToString();
-                        if (!string.IsNullOrEmpty(mac))
-                            return mac;
-                    }
+                    if (Array.IndexOf(physicalTypes, nic.NetworkInterfaceType) < 0)
+                        continue;
+                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    var mac = nic.GetPhysicalAddress().ToString();
+                    if (!string.IsNullOrEmpty(mac))
+                        return mac;
+                }
+
+                // 兜底：任意 Up 且非回环的网卡
+                foreach (var nic in nics)
+                {
+                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                        continue;
+                    var mac = nic.GetPhysicalAddress().ToString();
+                    if (!string.IsNullOrEmpty(mac))
+                        return mac;
                 }
             }
             catch { }
@@ -296,9 +317,9 @@ namespace ControlTimeService
             }
         }
 
-        private void DispatchRemoteCommand(Action action)
+        private void DispatchRemoteCommand(Action action, bool highPriority = false)
         {
-            _mainWindow.EnqueueRemoteCommand(action);
+            _mainWindow.EnqueueRemoteCommand(action, highPriority);
             _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
             {
                 _mainWindow.ProcessRemoteCommandQueue();
@@ -307,7 +328,8 @@ namespace ControlTimeService
 
         private void ProcessCommands(List<RemoteCommand> commands)
         {
-            foreach (var command in commands)
+            foreach (var command in commands
+                .OrderBy(command => string.Equals(command?.Command, "unlock", StringComparison.OrdinalIgnoreCase) ? 0 : 1))
             {
                 if (command == null || string.IsNullOrWhiteSpace(command.Command))
                     continue;
@@ -323,7 +345,7 @@ namespace ControlTimeService
 
                     case "unlock":
                         var unlockMinutes = GetMinutesFromParameters(command.Parameters, 30);
-                        DispatchRemoteCommand(() => _mainWindow.RemoteUnlock(unlockMinutes));
+                        DispatchRemoteCommand(() => _mainWindow.RemoteUnlock(unlockMinutes), highPriority: true);
                         break;
 
                     case "update_config":

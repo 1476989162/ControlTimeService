@@ -21,6 +21,8 @@ namespace ControlTimeService
         private bool _requirePasswordForResume; // 暂停模式下解锁是否需密码
         private bool _isAppViolationPause; // 是否因违规应用触发的暂停
         private bool _isMorningLockMode; // 早晨锁定模式
+        private bool _isDayDisabledLock; // 当天未启用导致的密码锁
+        private bool _isIntegrityLock; // 时间记录异常导致的密码锁
         private readonly Action? _onEnterShutdownMode;
 
         public int? TemporaryUsageMinutes { get; private set; }
@@ -45,7 +47,9 @@ namespace ControlTimeService
             bool requirePasswordForResume = false,
             bool isAppViolationPause = false,
             Action onUiTick = null,
-            bool isMorningLockMode = false)
+            bool isMorningLockMode = false,
+            bool isDayDisabledLock = false,
+            bool isIntegrityLock = false)
         {
             InitializeComponent();
             _endTime = endTime;
@@ -58,6 +62,8 @@ namespace ControlTimeService
             _requirePasswordForResume = requirePasswordForResume;
             _isAppViolationPause = isAppViolationPause;
             _isMorningLockMode = isMorningLockMode;
+            _isDayDisabledLock = isDayDisabledLock;
+            _isIntegrityLock = isIntegrityLock;
             _onUiTick = onUiTick;
 
             if (!_isAdminMode)
@@ -176,7 +182,11 @@ namespace ControlTimeService
         private void EnterPasswordOnlyMode()
         {
             var now = DateTime.Now;
-            if (IsNightlyShutdownTime(now))
+            if (_isIntegrityLock)
+                TxtTitle.Text = "时间记录异常，请输入密码核实后继续使用";
+            else if (_isDayDisabledLock)
+                TxtTitle.Text = "今日未开放使用，请输入密码";
+            else if (IsNightlyShutdownTime(now))
                 TxtTitle.Text = "夜间时段已超限，请输入密码";
             else if (now.TimeOfDay >= new TimeSpan(18, 0, 0) && now.TimeOfDay < new TimeSpan(20, 30, 0))
                 TxtTitle.Text = "晚间时段已超限，请输入密码";

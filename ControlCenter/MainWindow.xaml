@@ -47,6 +47,12 @@
                     Height="30"
                     Margin="5"
                     Click="EditClientSettings_Click"/>
+            <Button Content="删除客户端"
+                    Width="90"
+                    Height="30"
+                    Margin="5"
+                    Click="DeleteClient_Click"
+                    ToolTip="从服务端客户端列表中移除该客户端，且不再保留其注册记录"/>
             <Button Content="启动服务器"
                     x:Name="StartServerBtn"
                     Width="100" 
@@ -169,6 +175,12 @@
                 <DataGridTextColumn Header="今日已用(小时)" 
                                     Binding="{Binding TotalUsageHoursToday, StringFormat={}{0:N1}}" 
                                     Width="120"/>
+                <DataGridTextColumn Header="今日开屏" 
+                                    Binding="{Binding OpenTimeDisplay}" 
+                                    Width="90"/>
+                <DataGridTextColumn Header="今日锁屏" 
+                                    Binding="{Binding LockedTimeDisplay}" 
+                                    Width="90"/>
                 <DataGridTextColumn Header="最后心跳" 
                                     Binding="{Binding LastHeartbeat}" 
                                     Width="150"/>
@@ -181,6 +193,8 @@
                     <MenuItem Header="客户端设置" Click="EditClientSettings_Click"/>
                     <MenuItem Header="推送升级" Click="PushUpdate_Click"/>
                     <MenuItem Header="远程关机" Click="ShutdownClient_Click"/>
+                    <Separator/>
+                    <MenuItem Header="删除客户端" Click="DeleteClient_Click"/>
                 </ContextMenu>
             </DataGrid.ContextMenu>
         </DataGrid>

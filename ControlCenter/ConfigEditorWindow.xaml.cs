@@ -174,12 +174,13 @@ namespace ControlCenter
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许猫箱", schedule.AllowMaoxiang, "AllowMaoxiang"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许抖音", schedule.AllowDouyin, "AllowDouyin"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许快手", schedule.AllowKuaishou, "AllowKuaishou"));
+            appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许小红书", schedule.AllowXiaohongshu, "AllowXiaohongshu"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许番茄小说", schedule.AllowFanqieNovel, "AllowFanqieNovel"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许腾讯应用宝（不含其内游戏）", schedule.AllowTencentAppStore, "AllowTencentAppStore"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("允许其他游戏（Steam 等）", schedule.AllowOtherGames, "AllowOtherGames"));
-            appPolicyPanel.Children.Add(CreatePolicyCheckBox("拦截抖音/豆包游戏视频（允许抖音时仍生效）", schedule.BlockDouyinGameVideos, "BlockDouyinGameVideos"));
+            appPolicyPanel.Children.Add(CreatePolicyCheckBox("拦截短视频游戏内容（抖音/快手/小红书/豆包/浏览器）", schedule.BlockDouyinGameVideos, "BlockDouyinGameVideos"));
             appPolicyPanel.Children.Add(CreatePolicyCheckBox("监控豆包内打开的抖音", schedule.MonitorDoubao, "MonitorDoubao"));
-            appPolicyPanel.Children.Add(CreateTimeInput("游戏视频关闭阈值（秒）:", schedule.DouyinGameVideoThresholdSeconds.ToString(), "DouyinGameThreshold"));
+            appPolicyPanel.Children.Add(CreateTimeInput("游戏视频关闭阈值（秒，最少10）:", schedule.DouyinGameVideoThresholdSeconds.ToString(), "DouyinGameThreshold"));
 
             appPolicyGroup.Content = appPolicyPanel;
             stackPanel.Children.Add(appPolicyGroup);
@@ -286,6 +287,9 @@ namespace ControlCenter
                                 case "AllowKuaishou":
                                     schedule.AllowKuaishou = checkBox.IsChecked ?? false;
                                     break;
+                                case "AllowXiaohongshu":
+                                    schedule.AllowXiaohongshu = checkBox.IsChecked ?? false;
+                                    break;
                                 case "AllowFanqieNovel":
                                     schedule.AllowFanqieNovel = checkBox.IsChecked ?? false;
                                     break;
@@ -342,7 +346,7 @@ namespace ControlCenter
                                     schedule.MorningUnlockTime = textBox.Text;
                                     break;
                                 case "DouyinGameThreshold":
-                                    if (int.TryParse(textBox.Text, out int threshold) && threshold >= 1)
+                                    if (int.TryParse(textBox.Text, out int threshold) && threshold >= 10)
                                         schedule.DouyinGameVideoThresholdSeconds = threshold;
                                     break;
                             }

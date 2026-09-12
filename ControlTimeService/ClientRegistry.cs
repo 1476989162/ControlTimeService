@@ -33,6 +33,10 @@ namespace ControlTimeService
         [JsonPropertyName("clientMessages")]
         public List<ClientMessage> ClientMessages { get; set; }
 
+        /// <summary>离线时排队的远程命令（上线后下发）</summary>
+        [JsonPropertyName("pendingCommands")]
+        public List<RemoteCommand> PendingCommands { get; set; }
+
         public ClientInfo ToClientInfo(bool isOnline)
         {
             return new ClientInfo
@@ -45,7 +49,10 @@ namespace ControlTimeService
                 Status = isOnline ? "Online" : "Offline",
                 Config = Config,
                 AppPolicy = AppPolicy,
-                ClientMessages = ClientMessages
+                ClientMessages = ClientMessages,
+                PendingCommands = PendingCommands == null
+                    ? new List<RemoteCommand>()
+                    : new List<RemoteCommand>(PendingCommands)
             };
         }
     }
@@ -158,6 +165,48 @@ namespace ControlTimeService
         public List<ClientMessage> GetMessages(string clientId)
         {
             return _records.TryGetValue(clientId, out var record) ? record.ClientMessages : null;
+        }
+
+        public void SavePendingCommands(string clientId, List<RemoteCommand> commands)
+        {
+            EnsureRecord(clientId);
+            _records[clientId].PendingCommands = commands == null
+                ? new List<RemoteCommand>()
+                : new List<RemoteCommand>(commands);
+            Save();
+        }
+
+        /// <summary>
+        /// 移除客户端记录（删除注册表条目及独立配置文件）。
+        /// </summary>
+        /// <returns>是否存在并成功移除。</returns>
+        public bool Remove(string clientId)
+        {
+            // 从注册表字典中移除
+            var removed = _records.Remove(clientId);
+
+            // 删除该客户端的独立配置文件（client_configs/{id}.json）
+            try
+            {
+                var configPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory, "client_configs", $"{clientId}.json");
+                if (File.Exists(configPath))
+                    File.Delete(configPath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"删除客户端独立配置失败: {ex.Message}");
+            }
+
+            if (removed)
+                Save();
+
+            return removed;
+        }
+
+        public List<RemoteCommand> GetPendingCommands(string clientId)
+        {
+            return _records.TryGetValue(clientId, out var record) ? record.PendingCommands : null;
         }
 
         private void EnsureRecord(string clientId)

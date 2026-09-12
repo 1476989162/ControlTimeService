@@ -25,6 +25,10 @@ namespace ControlTimeService
         [JsonPropertyName("allowKuaishou")]
         public bool AllowKuaishou { get; set; } = true;
 
+        /// <summary>是否允许小红书</summary>
+        [JsonPropertyName("allowXiaohongshu")]
+        public bool AllowXiaohongshu { get; set; } = true;
+
         /// <summary>是否允许番茄小说</summary>
         [JsonPropertyName("allowFanqieNovel")]
         public bool AllowFanqieNovel { get; set; } = true;
@@ -58,6 +62,7 @@ namespace ControlTimeService
                 AllowMaoxiang = true,
                 AllowDouyin = true,
                 AllowKuaishou = true,
+                AllowXiaohongshu = true,
                 AllowFanqieNovel = true,
                 AllowTencentAppStore = true,
                 AllowOtherGames = true,
@@ -76,6 +81,7 @@ namespace ControlTimeService
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
                 AllowKuaishou = AllowKuaishou,
+                AllowXiaohongshu = AllowXiaohongshu,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -136,6 +142,7 @@ namespace ControlTimeService
             schedule.AllowMaoxiang = policy.AllowMaoxiang;
             schedule.AllowDouyin = policy.AllowDouyin;
             schedule.AllowKuaishou = policy.AllowKuaishou;
+            schedule.AllowXiaohongshu = policy.AllowXiaohongshu;
             schedule.AllowFanqieNovel = policy.AllowFanqieNovel;
             schedule.AllowTencentAppStore = policy.AllowTencentAppStore;
             schedule.AllowOtherGames = policy.AllowOtherGames;

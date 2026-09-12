@@ -61,13 +61,15 @@ namespace ControlTimeService
         [JsonPropertyName("allowVideo")]
         public bool AllowVideo { get; set; } = false;
         [JsonPropertyName("allowWeChatMiniGames")]
-        public bool AllowWeChatMiniGames { get; set; } = true;
+        public bool AllowWeChatMiniGames { get; set; } = false;
         [JsonPropertyName("allowMaoxiang")]
         public bool AllowMaoxiang { get; set; } = true;
         [JsonPropertyName("allowDouyin")]
         public bool AllowDouyin { get; set; } = true;
         [JsonPropertyName("allowKuaishou")]
         public bool AllowKuaishou { get; set; } = true;
+        [JsonPropertyName("allowXiaohongshu")]
+        public bool AllowXiaohongshu { get; set; } = true;
         [JsonPropertyName("allowFanqieNovel")]
         public bool AllowFanqieNovel { get; set; } = true;
         [JsonPropertyName("allowTencentAppStore")]
@@ -93,6 +95,7 @@ namespace ControlTimeService
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
                 AllowKuaishou = AllowKuaishou,
+                AllowXiaohongshu = AllowXiaohongshu,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -126,6 +129,7 @@ namespace ControlTimeService
                 AllowMaoxiang = AllowMaoxiang,
                 AllowDouyin = AllowDouyin,
                 AllowKuaishou = AllowKuaishou,
+                AllowXiaohongshu = AllowXiaohongshu,
                 AllowFanqieNovel = AllowFanqieNovel,
                 AllowTencentAppStore = AllowTencentAppStore,
                 AllowOtherGames = AllowOtherGames,
@@ -179,6 +183,7 @@ namespace ControlTimeService
             result.AllowMaoxiang = incoming.AllowMaoxiang;
             result.AllowDouyin = incoming.AllowDouyin;
             result.AllowKuaishou = incoming.AllowKuaishou;
+            result.AllowXiaohongshu = incoming.AllowXiaohongshu;
             result.AllowFanqieNovel = incoming.AllowFanqieNovel;
             result.AllowTencentAppStore = incoming.AllowTencentAppStore;
             result.AllowOtherGames = incoming.AllowOtherGames;
@@ -444,6 +449,7 @@ namespace ControlTimeService
                     schedule.AllowMaoxiang = legacyPolicy.AllowMaoxiang;
                     schedule.AllowDouyin = legacyPolicy.AllowDouyin;
                     schedule.AllowKuaishou = legacyPolicy.AllowKuaishou;
+                    schedule.AllowXiaohongshu = legacyPolicy.AllowXiaohongshu;
                     schedule.AllowFanqieNovel = legacyPolicy.AllowFanqieNovel;
                     schedule.AllowTencentAppStore = legacyPolicy.AllowTencentAppStore;
                     schedule.AllowOtherGames = legacyPolicy.AllowOtherGames;

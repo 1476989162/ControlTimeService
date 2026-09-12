@@ -156,9 +156,15 @@ namespace ControlTimeService
                 var exePath = Path.Combine(appDir, "ControlTimeService.exe");
                 var updaterScript = Path.Combine(workDir, "apply_update.bat");
 
+                // 不覆盖客户端本地配置与运行状态：control_config / time_config / state
+                // 先杀光所有旧实例，防止升级后新旧实例并存（互相覆盖 state / 争抢命令）
                 var script = $@"@echo off
 chcp 65001 >nul
 ping 127.0.0.1 -n 4 >nul
+taskkill /f /im ControlTimeService.exe >nul 2>&1
+if exist ""{sourceDir}\control_config.json"" del /f /q ""{sourceDir}\control_config.json""
+if exist ""{sourceDir}\time_config.json"" del /f /q ""{sourceDir}\time_config.json""
+if exist ""{sourceDir}\state.txt"" del /f /q ""{sourceDir}\state.txt""
 xcopy /E /Y /I ""{sourceDir}\*"" ""{appDir}\""
 start """" ""{exePath}""
 (goto) 2>nul & del ""%~f0""

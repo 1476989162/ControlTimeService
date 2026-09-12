@@ -1,16 +1,26 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- windows10 TFM：启用 Windows.Media.Ocr / WinRT -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWindowsForms>True</UseWindowsForms>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.0.21</Version>
+    <AssemblyVersion>1.0.21.0</AssemblyVersion>
+    <FileVersion>1.0.21.0</FileVersion>
+    <!-- 1.0.21: 修复客户端经常无响应——应用监控从UI线程移到后台线程（进程枚举/MainModule/UIAutomation不再阻塞界面）、
+         Process对象正确释放（修复每秒上百个句柄泄漏）、看门狗schtasks调用改后台执行、异常弹窗60秒节流 -->
+    <!-- 1.0.20: 修复客户端读不到MAC导致ID变*_unknown、服务端把本地杂散配置收养为权威配置（现改为继承同名旧记录配置）；网卡识别优先物理网卡 -->
+    <!-- 1.0.19: 最强看门狗——注册表+计划任务每分钟自检，崩溃/被任务管理器强杀1分钟内自动拉起，新增crash.log全局异常兜底与自愈 -->
+    <!-- 1.0.18: 修复卡顿/重启后丢失锁定时间——程序不运行期间的流逝时间计入使用与休息阶段，state.txt 新增最后落盘时刻，重启后精确接续剩余锁定 -->
+    <!-- 1.0.17: 临时禁用完整性“时间比对不符合”锁提示；服务端客户端列表新增删除功能 -->
+    <!-- 1.0.16: 服务端命令无条件生效——远程锁定/暂停计时不再被远程解锁期忽略，且锁定/暂停会立即取消未到期的解锁授权 -->
+    <!-- 1.0.15: 完整性校验豁免正常关机时段，修复当天长时间关机再开机误报“时间记录异常”需密码 -->
+    <!-- 1.0.14: 单实例互斥+升级先杀旧进程，修复升级后双实例并存导致状态错乱/锁屏失效 -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,9 +32,4 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="System.Text.Json" Version="8.0.0" />
-  </ItemGroup>
-
 </Project>

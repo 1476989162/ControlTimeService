@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">时间控制</string>
+    <string name="accessibility_service_description">用于检测应用使用情况，识别违规应用</string>
+</resources>
