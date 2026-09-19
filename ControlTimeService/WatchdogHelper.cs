@@ -14,7 +14,13 @@ namespace ControlTimeService
     public static class WatchdogHelper
     {
         public const string TaskName = "ControlTimeService_Watchdog";
-        private const string WatchdogBatName = "watchdog.bat";
+
+        /// <summary>看门狗存活检查参数：进程内自检，避免再经 cmd.exe。</summary>
+        private const string WatchdogArg = "--watchdog";
+
+        /// <summary>旧版遗留脚本名，仅用于清理。</summary>
+        private const string LegacyWatchdogBatName = "watchdog.bat";
+
         private static readonly TimeSpan ReEnsureInterval = TimeSpan.FromMinutes(10);
         private static DateTime _lastEnsure = DateTime.MinValue;
         private static readonly object _lock = new();
@@ -26,8 +32,9 @@ namespace ControlTimeService
                 try
                 {
                     EnsureAutoStart();
-                    EnsureWatchdogBatch();
                     EnsureScheduledTask();
+                    // 任务改用 exe 直跑后再清理旧脚本，尽量缩短“任务还指着 bat 但 bat 已删”的窗口
+                    RemoveLegacyWatchdogBatch();
                     _lastEnsure = DateTime.Now;
                 }
                 catch (Exception ex)
@@ -59,7 +66,7 @@ namespace ControlTimeService
             catch { return AppDomain.CurrentDomain.BaseDirectory; }
         }
 
-        private static string GetWatchdogBatPath() => Path.Combine(GetAppDir(), WatchdogBatName);
+        private static string GetLegacyWatchdogBatPath() => Path.Combine(GetAppDir(), LegacyWatchdogBatName);
 
         // 注册表开机自启（HKCU Run），登录即启动
         private static void EnsureAutoStart()
@@ -83,46 +90,26 @@ namespace ControlTimeService
             }
         }
 
-        private static void EnsureWatchdogBatch()
+        /// <summary>
+        /// 清理旧版遗留的 watchdog.bat。
+        /// 旧版计划任务直接执行该批处理：任务计划以交互式令牌运行时，批处理必须由 cmd.exe 承载，
+        /// 控制台程序在交互会话里会分配一个控制台窗口 —— 表现为每分钟闪一次黑框。
+        /// 新版改为直接运行 exe（GUI 子系统，不分配控制台），因此该脚本不再需要。
+        /// </summary>
+        private static void RemoveLegacyWatchdogBatch()
         {
             try
             {
-                var exePath = GetExePath();
-                var exeName = Path.GetFileName(exePath);
-                if (string.IsNullOrWhiteSpace(exeName)) exeName = "ControlTimeService.exe";
-                var batPath = GetWatchdogBatPath();
+                var batPath = GetLegacyWatchdogBatPath();
+                if (!File.Exists(batPath))
+                    return;
 
-                // bat 逻辑：用 tasklist 检测进程是否存在，不存在则拉起。避免触发单实例的 MessageBox。
-                // 带 --watchdog 参数可让二次启动静默退出，不弹窗打扰
-                var batContent = $@"@echo off
-setlocal
-chcp 65001 >nul 2>&1
-tasklist /FI ""IMAGENAME eq {exeName}"" 2>nul | find /I ""{exeName}"" >nul
-if errorlevel 1 (
-  start """" ""{exePath}"" --watchdog
-)
-";
-
-                var needWrite = true;
-                if (File.Exists(batPath))
-                {
-                    try
-                    {
-                        var existing = File.ReadAllText(batPath, Encoding.Default);
-                        if (string.Equals(existing.Trim(), batContent.Trim(), StringComparison.Ordinal))
-                            needWrite = false;
-                    }
-                    catch { }
-                }
-                if (needWrite)
-                {
-                    File.WriteAllText(batPath, batContent, new UTF8Encoding(false));
-                    CrashLogger.Log($"已生成看门狗脚本: {batPath}");
-                }
+                File.Delete(batPath);
+                CrashLogger.Log($"已删除旧版看门狗脚本（消除每分钟黑框）: {batPath}");
             }
             catch (Exception ex)
             {
-                CrashLogger.Log($"EnsureWatchdogBatch 失败: {ex.Message}");
+                CrashLogger.Log($"删除旧版看门狗脚本失败: {ex.Message}");
             }
         }
 
@@ -176,7 +163,6 @@ if errorlevel 1 (
         {
             try
             {
-                var batPath = GetWatchdogBatPath();
                 var psi = new ProcessStartInfo("schtasks", $"/query /tn \"{TaskName}\" /v /fo LIST")
                 {
                     CreateNoWindow = true,
@@ -189,9 +175,13 @@ if errorlevel 1 (
                 var output = p?.StandardOutput.ReadToEnd() ?? "";
                 p?.WaitForExit(5000);
                 if (p == null || p.ExitCode != 0) return false;
-                // 检查任务的“运行”字段是否包含 watchdog.bat
-                return output.IndexOf(WatchdogBatName, StringComparison.OrdinalIgnoreCase) >= 0
-                    || output.IndexOf("watchdog", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                // 旧版任务直接跑 watchdog.bat —— 判定为需要重建（它会每分钟闪黑框）
+                if (output.IndexOf(LegacyWatchdogBatName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
+
+                // 新版任务直接运行 exe 并带 --watchdog（GUI 子系统，不分配控制台窗口）
+                return output.IndexOf(WatchdogArg, StringComparison.OrdinalIgnoreCase) >= 0;
             }
             catch { return false; }
         }
@@ -200,11 +190,14 @@ if errorlevel 1 (
         {
             try
             {
-                var batPath = GetWatchdogBatPath();
+                var exePath = GetExePath();
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+                    return false;
+
                 var appDir = GetAppDir();
                 var xmlPath = Path.Combine(Path.GetTempPath(), $"ControlTimeService_Task_{Guid.NewGuid():N}.xml");
 
-                var escapedBat = System.Security.SecurityElement.Escape(batPath);
+                var escapedExe = System.Security.SecurityElement.Escape(exePath);
                 var escapedDir = System.Security.SecurityElement.Escape(appDir);
                 var now = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
                 // 明天的日期用于 CalendarTrigger 的 StartBoundary，避免过去时间导致首次不触发
@@ -215,7 +208,7 @@ if errorlevel 1 (
   <RegistrationInfo>
     <Date>{now}</Date>
     <Author>ControlTimeService</Author>
-    <Description>ControlTimeService 看门狗：每分钟检查进程是否存活，自动拉起。由客户端自动创建，删除后10分钟内自愈重建。</Description>
+    <Description>ControlTimeService 看门狗：每分钟以 --watchdog 运行客户端自身做存活检查，不在则拉起。直接运行 exe（GUI 子系统）不会弹出控制台窗口。由客户端自动创建，删除后10分钟内自愈重建。</Description>
     <URI>\{TaskName}</URI>
   </RegistrationInfo>
   <Triggers>
@@ -263,7 +256,8 @@ if errorlevel 1 (
   </Settings>
   <Actions Context=""Author"">
     <Exec>
-      <Command>{escapedBat}</Command>
+      <Command>{escapedExe}</Command>
+      <Arguments>{WatchdogArg}</Arguments>
       <WorkingDirectory>{escapedDir}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -303,9 +297,12 @@ if errorlevel 1 (
         {
             try
             {
-                var batPath = GetWatchdogBatPath();
-                // 使用 schtasks 简单语法回退；注意 bat 路径引号转义
-                var tr = $"\\\"{batPath}\\\"";
+                var exePath = GetExePath();
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+                    return;
+
+                // 直接运行 exe 并带 --watchdog：GUI 子系统进程不分配控制台窗口，不会再闪黑框
+                var tr = $"\\\"{exePath}\\\" {WatchdogArg}";
                 // /sc minute /mo 1 每分钟
                 var args = $"/create /tn \"{TaskName}\" /tr \"{tr}\" /sc minute /mo 1 /f /rl HIGHEST";
                 var psi = new ProcessStartInfo("schtasks", args)
@@ -324,9 +321,10 @@ if errorlevel 1 (
                 // 若简单命令也未包含登录触发，额外创建一个登录触发任务作为补充
                 if (ok)
                 {
+                    // 登录触发同样走 --watchdog：由它去拉起正式实例，
+                    // 避免与注册表 Run 同时启动而弹出「已在运行」提示
                     var logonTask = TaskName + "_Logon";
-                    var exePath = GetExePath();
-                    var tr2 = $"\\\"{exePath}\\\"";
+                    var tr2 = $"\\\"{exePath}\\\" {WatchdogArg}";
                     var args2 = $"/create /tn \"{logonTask}\" /tr \"{tr2}\" /sc onlogon /f /rl HIGHEST /delay 0000:30";
                     var psi2 = new ProcessStartInfo("schtasks", args2)
                     {

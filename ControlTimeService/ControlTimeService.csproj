@@ -9,9 +9,11 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWindowsForms>True</UseWindowsForms>
-    <Version>1.0.21</Version>
-    <AssemblyVersion>1.0.21.0</AssemblyVersion>
-    <FileVersion>1.0.21.0</FileVersion>
+    <Version>1.0.22</Version>
+    <AssemblyVersion>1.0.22.0</AssemblyVersion>
+    <FileVersion>1.0.22.0</FileVersion>
+    <!-- 1.0.22: 消除看门狗每分钟弹出的黑色控制台窗口——计划任务不再执行 watchdog.bat（cmd.exe 会分配控制台），
+         改为直接运行 exe 并带 watchdog 参数，由进程内自检存活；旧版 watchdog.bat 会自动清理 -->
     <!-- 1.0.21: 修复客户端经常无响应——应用监控从UI线程移到后台线程（进程枚举/MainModule/UIAutomation不再阻塞界面）、
          Process对象正确释放（修复每秒上百个句柄泄漏）、看门狗schtasks调用改后台执行、异常弹窗60秒节流 -->
     <!-- 1.0.20: 修复客户端读不到MAC导致ID变*_unknown、服务端把本地杂散配置收养为权威配置（现改为继承同名旧记录配置）；网卡识别优先物理网卡 -->
