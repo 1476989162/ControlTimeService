@@ -1,6 +1,6 @@
 {
   "default_package_url": "http://192.168.68.56:19528",
-  "default_version": "1.0.22",
+  "default_version": "1.0.23",
   "default_manifest_url": "",
   "local_package_filename": "ControlTimeService.zip",
   "auto_push_on_save": true,

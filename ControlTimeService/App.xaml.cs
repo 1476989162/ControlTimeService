@@ -23,11 +23,15 @@ namespace ControlTimeService
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            // 看门狗分支必须最先处理：计划任务每分钟用它做一次存活检查。
-            // 本分支不初始化日志、不创建任何窗口，检查完立即退出。
+            // 看门狗分支必须最先处理，而且【绝不能正常返回 WPF 的启动流程】：
+            // App.xaml 配置了 StartupUri，只要从 OnStartup 返回，
+            // WPF 依然会创建 MainWindow —— 而计划任务每分钟就拉起一次本进程，
+            // 于是每分钟多出一个客户端实例（现象：屏幕上出现两个甚至多个倒计时窗口）。
+            // Shutdown() 在这一阶段不保证拦住 StartupUri，必须用 Environment.Exit 直接结束进程。
             if (IsWatchdogInvocation(e))
             {
                 RunWatchdogCheck();
+                Environment.Exit(0);
                 return;
             }
 
@@ -54,7 +58,8 @@ namespace ControlTimeService
             {
                 System.Windows.MessageBox.Show("ControlTimeService 已在运行，请勿重复启动。",
                     "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-                Shutdown();
+                // 同理：Shutdown() 在 OnStartup 阶段拦不住 StartupUri，会留下一个幽灵窗口
+                Environment.Exit(0);
                 return;
             }
 

@@ -9,9 +9,12 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWindowsForms>True</UseWindowsForms>
-    <Version>1.0.22</Version>
-    <AssemblyVersion>1.0.22.0</AssemblyVersion>
-    <FileVersion>1.0.22.0</FileVersion>
+    <Version>1.0.23</Version>
+    <AssemblyVersion>1.0.23.0</AssemblyVersion>
+    <FileVersion>1.0.23.0</FileVersion>
+    <!-- 1.0.23: 修复 1.0.22 引入的严重问题——看门狗分支执行完存活检查后没有终止进程，
+         而 App.xaml 配了 StartupUri，WPF 仍会创建 MainWindow，导致每分钟多出一个客户端实例
+         （现象：被控端出现两个甚至多个倒计时窗口）。改为 Environment.Exit 立即结束进程 -->
     <!-- 1.0.22: 消除看门狗每分钟弹出的黑色控制台窗口——计划任务不再执行 watchdog.bat（cmd.exe 会分配控制台），
          改为直接运行 exe 并带 watchdog 参数，由进程内自检存活；旧版 watchdog.bat 会自动清理 -->
     <!-- 1.0.21: 修复客户端经常无响应——应用监控从UI线程移到后台线程（进程枚举/MainModule/UIAutomation不再阻塞界面）、
